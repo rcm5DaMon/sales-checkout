@@ -341,12 +341,59 @@
         if (!match) return false;
 
         const timeSpent = parseInt(stripQuotesTrim(match[TIME_COL]), 10);
-        return Number.isFinite(timeSpent) && timeSpent >= 15 ? timeSpent : timeSpent;
+
+        // Return the actual time spent or 'valid' if 15 minutes or more
+        return Number.isFinite(timeSpent) ? timeSpent : false;
       } catch (e) {
         console.error("Time check error:", e);
         return false;
       }
     }
+
+    // ============== Distance + Gate ==============
+    async function computeDistance() {
+      if (!SELECTED_DEALER || !MY_LOC) { 
+        updateGate(); 
+        return; 
+      }
+
+      // Calculate the distance between the current location and dealer
+      const dist = Math.round(haversineMeters(MY_LOC.lat, MY_LOC.lng, SELECTED_DEALER.lat, SELECTED_DEALER.lng));
+      distanceEl.value = dist;
+
+      // Check if the location is within the allowed radius
+      const isValidLocation = dist <= RADIUS_M;
+      statusEl.value = isValidLocation ? "WITHIN RADIUS" : "OUT OF RADIUS";
+      statusEl.className = isValidLocation ? "ok" : "warn";
+
+      let isValidTime = true;
+      if (isValidLocation) {
+        // Check time spent only if location is valid
+        const timeSpent = await checkTimeSpent();
+        isValidTime = timeSpent >= 15;
+        radiusInfo.textContent = isValidTime ? `Time spent: valid` : `Time spent: ${timeSpent} minutes`;
+      }
+
+      // Enable the "Go to Checkout" button only if both conditions are valid
+      goCheckoutBtn.disabled = !(isValidLocation && isValidTime);
+    }
+
+    function updateGate() {
+      const needDealer = !SELECTED_DEALER;
+      const needGPS = !MY_LOC;
+      if (needDealer && needGPS) { statusEl.value = "Select dealer & get GPS"; }
+      else if (needDealer)       { statusEl.value = "Select dealer"; }
+      else if (needGPS)          { statusEl.value = "Get GPS"; }
+      statusEl.className = "";
+      goCheckoutBtn.disabled = true;
+      distanceEl.value = "";
+    }
+
+    // ============== Checkout ==============
+    goCheckoutBtn.addEventListener("click", () => {
+      if (goCheckoutBtn.disabled) return;
+      window.location.href = "https://your-checkout-page.com"; // TODO
+    });
   </script>
 </body>
 </html>
