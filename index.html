@@ -145,7 +145,7 @@
     const SHEET_URL_TIME = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQQSE39NKkvwxpJz1O8QxCFuudjvn2CJY3nyYyq-4pdi5XNU3nhsHMaMVemNxFqazjcPYt51_EZ0g8r/pub?gid=1647008010&single=true&output=csv";
 
     let DEALERS = [], SALESPEOPLE = [], SELECTED_DEALER = null, MY_LOC = null, SALES_NAME = "";
-    const RADIUS_M = 500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000; // meters
+    const RADIUS_M = 500; // meters
     const MIN_TIME_MINUTES = 15;
     radiusInfo.textContent = `Allowed radius: ${RADIUS_M} m`;
 
@@ -171,6 +171,7 @@
         dealerSuggestions.innerHTML = `<span class="err">Error: ${e.message}</span>`;
       }
     }
+
     async function loadSalespeople() {
       try {
         const res = await fetch(CSV_URL_SALESMEN, { cache: "no-store" });
@@ -182,29 +183,9 @@
         salesNameList.innerHTML = SALESPEOPLE.map(n => `<option value="${n}">`).join("");
       } catch (e) { console.error("Error loading salespeople:", e.message); }
     }
+
     loadDealers(); loadSalespeople();
     reloadBtn.addEventListener("click", loadDealers);
-
-    // ===================== Dealer Suggestions =====================
-    const updateDealerSuggestions = debounce(() => {
-      const q = dealerInput.value.toLowerCase().trim();
-      if (!q) { dealerSuggestions.innerHTML = ""; return; }
-      const suggestions = DEALERS.filter(d => d.name.toLowerCase().includes(q)).slice(0, 50);
-      dealerSuggestions.innerHTML = suggestions
-        .map(d => `<div class="pill" onclick="selectDealer('${escJS(d.name)}')">${d.name}</div>`)
-        .join("") || `<span class="muted">No matches.</span>`;
-    }, 150);
-    dealerInput.addEventListener("input", updateDealerSuggestions);
-
-    window.selectDealer = function(dealerName) {
-      const selected = DEALERS.find(d => d.name === dealerName);
-      if (!selected) return;
-      SELECTED_DEALER = selected;
-      dealerInput.value = dealerName;
-      dealerSuggestions.innerHTML = '';
-      dealerCoords.value = `${selected.lat}, ${selected.lng}`;
-      computeDistance();
-    };
 
     // ===================== Time Check =====================
     async function checkTimeSpent() {
@@ -239,6 +220,7 @@
 
         const raw = stripQuotesTrim(match[TIME_COL]);
         const timeSpent = parseInt(raw, 10);
+        console.log("Raw time from match:", raw); // Debug log
         return { ok: Number.isFinite(timeSpent) && timeSpent >= MIN_TIME_MINUTES, minutes: timeSpent || 0 };
       } catch (e) {
         console.error("Time check error:", e);
