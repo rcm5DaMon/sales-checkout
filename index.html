@@ -115,6 +115,14 @@
     }
     function debounce(fn, delay = 200) { let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), delay); }; }
 
+    // ✅ Normalize keys (remove hidden chars & spaces)
+    function normalizeKey(s) {
+      return String(s ?? "")
+        .replace(/\u00a0/g, " ")  // replace non-breaking spaces
+        .replace(/\s+/g, " ")     // collapse multiple spaces
+        .trim();
+    }
+
     // ===================== State =====================
     const salesNameInput = document.getElementById("salesNameInput");
     const salesNameList = document.getElementById("salesNameList");
@@ -136,8 +144,8 @@
     const SHEET_URL_TIME = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQQSE39NKkvwxpJz1O8QxCFuudjvn2CJY3nyYyq-4pdi5XNU3nhsHMaMVemNxFqazjcPYt51_EZ0g8r/pub?gid=1647008010&single=true&output=csv";
 
     let DEALERS = [], SALESPEOPLE = [], SELECTED_DEALER = null, MY_LOC = null, SALES_NAME = "";
-    const RADIUS_M = 50000000000000000000000000000000000000000000000000000000000000000000000000000000000; // meters
-    const MIN_TIME_MINUTES = 1500;
+    const RADIUS_M = 500; // meters
+    const MIN_TIME_MINUTES = 15;
     radiusInfo.textContent = `Allowed radius: ${RADIUS_M} m`;
 
     // ===================== Loaders =====================
@@ -217,11 +225,12 @@
         const TRIGGER_COL = 9;
         const TIME_COL = 10;
 
-        const match = rows.find(row => stripQuotesTrim(row[TRIGGER_COL]) === trigger);
+        const match = rows.find(row => normalizeKey(row[TRIGGER_COL]) === normalizeKey(trigger));
         if (!match) return { ok: false, minutes: 0 };
 
-        const timeSpent = parseInt(stripQuotesTrim(match[TIME_COL]), 10);
-        return { ok: Number.isFinite(timeSpent) && timeSpent >= MIN_TIME_MINUTES, minutes: timeSpent };
+        const raw = stripQuotesTrim(match[TIME_COL]);
+        const timeSpent = parseInt(raw, 10);
+        return { ok: Number.isFinite(timeSpent) && timeSpent >= MIN_TIME_MINUTES, minutes: timeSpent || 0 };
       } catch (e) {
         console.error("Time check error:", e);
         return { ok: false, minutes: 0 };
