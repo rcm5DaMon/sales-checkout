@@ -111,14 +111,12 @@
     const radiusInfo = document.getElementById("radiusInfo");
     const accInfo = document.getElementById("accInfo");
 
-    const DEALER_SHEET_GID = '0'; // GID of the 'Dealer' sheet
-    const SALES_SHEET_GID = '1037939658';  // GID of the 'Sales' sheet
-    const CSV_URL = "https://docs.google.com/spreadsheets/d/1uSXdXuYlRxyYtXNTEQbzD7p_w7wBOr8VKg-n5HHMIJo/export?format=csv";  // Base URL for both sheets
+    const CSV_URL_DEALERS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vS3Hpp6N8pjYkRMy-Pi58yCxZB5o-rCdQfnBv0Z_vHMq6Uii5uxG60BnpQVcsyDTg-X9-A-HPodXhpT/pub?output=csv";
+    const CSV_URL_SALES = "https://docs.google.com/spreadsheets/d/1uSXdXuYlRxyYtXNTEQbzD7p_w7wBOr8VKg-n5HHMIJo/edit?gid=0#gid=0"; // Add your sales names sheet URL here
     const SHEET_URL_TIME = "https://docs.google.com/spreadsheets/d/1BqrlzaARh3wJZ3sHeUp22LV-SdcsmSJ2rzKfruGz80U/edit?resourcekey=&gid=1647008010";
     const RADIUS_M = 50; // 50 meters radius
 
     let DEALERS = []; 
-    let SALES_NAMES = [];
     let SELECTED_DEALER = null;
     let MY_LOC = null;
     let SALES_NAME = "";
@@ -129,7 +127,7 @@
     async function loadSalesNames() {
       const salesSelect = document.getElementById("salesNameSelect");
       try {
-        const res = await fetch(`${CSV_URL}&gid=${SALES_SHEET_GID}`, { cache: "no-store" });
+        const res = await fetch(CSV_URL_SALES, { cache: "no-store" });
         if (!res.ok) throw new Error("Cannot fetch sales CSV");
         const text = await res.text();
         const rows = parseCSV(text);
@@ -139,9 +137,9 @@
           throw new Error("CSV header must include SalesName");
         }
 
-        SALES_NAMES = rows.map(r => (r[iName] || "").trim()).filter(name => name);
+        const salesNames = rows.map(r => (r[iName] || "").trim()).filter(name => name);
         
-        SALES_NAMES.forEach(name => {
+        salesNames.forEach(name => {
           const option = document.createElement("option");
           option.value = name;
           option.textContent = name;
@@ -157,7 +155,7 @@
     async function loadDealers() {
       dealerSuggestions.innerHTML = `<span class="muted">Loading dealers…</span>`;
       try {
-        const res = await fetch(`${CSV_URL}&gid=${DEALER_SHEET_GID}`, { cache: "no-store" });
+        const res = await fetch(CSV_URL_DEALERS, { cache: "no-store" });
         if (!res.ok) throw new Error("Cannot fetch dealer CSV");
         const text = await res.text();
         const rows = parseCSV(text);
