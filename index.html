@@ -120,6 +120,9 @@
     let SELECTED_DEALER = null;
     let MY_LOC = null;
     let SALES_NAME = "";
+    const RADIUS_M = 50;
+
+    radiusInfo.textContent = `Allowed radius: ${RADIUS_M} m`;
 
     // ------- Load Dealers -------
     async function loadDealers() {
@@ -163,6 +166,12 @@
         if (iName < 0) throw new Error("CSV header must include 'Sales Name'");
 
         SALESPEOPLE = rows.map(r => r[iName].trim()).filter(name => name);
+        SALESPEOPLE.forEach(name => {
+          const option = document.createElement("option");
+          option.value = name;
+          option.textContent = name;
+          salesNameInput.appendChild(option);
+        });
       } catch (e) {
         console.error("Error loading salespeople:", e.message);
       }
