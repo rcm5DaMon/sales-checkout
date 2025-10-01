@@ -313,7 +313,7 @@
         if (!match) return false;
 
         const timeSpent = parseInt(stripQuotesTrim(match[TIME_COL]), 10);
-        return Number.isFinite(timeSpent) && timeSpent >= 15;
+        return Number.isFinite(timeSpent) && timeSpent >= 2;
       } catch (e) {
         console.error("Time check error:", e);
         return false;
