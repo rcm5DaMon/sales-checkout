@@ -11,6 +11,7 @@
     h2 { margin-top: 0; }
     label { display:block; margin: 12px 0 6px; font-weight: 600; }
     input, select, button { padding: 10px; width: 100%; box-sizing: border-box; }
+    input[disabled] { background: rgba(127,127,127,.08); }
     button { cursor: pointer; }
     .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     .ok { color: #0a7b22; font-weight: 700; }
@@ -18,9 +19,11 @@
     .err { color: #b91c1c; font-weight: 700; }
     .muted { color: #666; font-size: 0.92rem; }
     .badge { display:inline-block; padding:2px 8px; border:1px solid #ddd; border-radius: 999px; margin-left:8px; font-size: 0.85rem; }
-    .pill { display:inline-block; padding:6px 10px; border:1px solid #ddd; border-radius:999px; margin:6px 6px 0 0; cursor:pointer; }
+    .pill { display:inline-block; padding:6px 10px; border:1px solid #ddd; border-radius:999px; margin:6px 6px 0 0; cursor:pointer; user-select:none; }
     .hidden { display:none; }
-    select { appearance: none; }
+    .hint { font-size: .85rem; color: #555; margin-top: 4px; }
+    .spinner { display:inline-block; width: 14px; height: 14px; border:2px solid #bbb; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: -2px; margin-right:6px;}
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
@@ -28,15 +31,17 @@
     <h2>Sales Location & Time Check</h2>
     <p class="muted">Input your name and select dealer to check your location and time spent at the dealer.</p>
 
-    <!-- Sales Name Input (with suggestions) -->
+    <!-- Sales Name Input (native suggestions via datalist) -->
     <label for="salesNameInput">Sales Name</label>
-    <input id="salesNameInput" type="text" placeholder="Type sales name..." autocomplete="off">
-    <div id="salesNameSuggestions"></div>
+    <input id="salesNameInput" type="text" placeholder="Type sales name..." list="salesNameList" autocomplete="off" />
+    <datalist id="salesNameList"></datalist>
+    <div id="salesNameSuggestions" class="hidden"></div> <!-- reserved (unused now) -->
 
     <!-- Dealer Name -->
     <label for="dealerInput">Search dealer by name</label>
-    <input id="dealerInput" type="text" placeholder="Type dealer name…" autocomplete="off">
+    <input id="dealerInput" type="text" placeholder="Type dealer name…" autocomplete="off" />
     <div id="dealerSuggestions"></div>
+    <div class="hint" id="dealerHint" aria-live="polite"></div>
 
     <!-- Coordinates -->
     <div class="row" style="margin-top:8px;">
@@ -78,15 +83,51 @@
   </div>
 
   <script>
-    // ------- Utilities -------
+    // ===================== Utilities =====================
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
+    // Robust CSV parser (handles quotes, commas, CRLF)
     function parseCSV(text) {
-      return text.trim().split(/\r?\n/).map(line => line.split(","));
+      const rows = [];
+      let row = [], cell = '', inQuotes = false;
+
+      for (let i = 0; i < text.length; i++) {
+        const c = text[i], n = text[i + 1];
+
+        if (inQuotes) {
+          if (c === '"' && n === '"') { cell += '"'; i++; }
+          else if (c === '"') { inQuotes = false; }
+          else { cell += c; }
+        } else {
+          if (c === '"') { inQuotes = true; }
+          else if (c === ',') { row.push(cell); cell = ''; }
+          else if (c === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
+          else if (c === '\r') { /* ignore CR */ }
+          else { cell += c; }
+        }
+      }
+      if (cell.length || row.length) { row.push(cell); rows.push(row); }
+      return rows;
+    }
+
+    function stripQuotesTrim(s) {
+      return String(s ?? '').replace(/^"+|"+$/g, '').trim();
+    }
+
+    function normalizeHeaders(arr) {
+      return arr.map(h => stripQuotesTrim(h).toLowerCase());
+    }
+
+    function uniqueSorted(arr) {
+      return [...new Set(arr)].sort((a,b)=>a.localeCompare(b));
+    }
+
+    function escJS(s) { // escape for inline onclick string literal
+      return String(s).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
     }
 
     function haversineMeters(lat1, lon1, lat2, lon2) {
-      const R = 6371000; 
+      const R = 6371000;
       const toRad = d => d * Math.PI / 180;
       const dLat = toRad(lat2 - lat1);
       const dLon = toRad(lon2 - lon1);
@@ -97,25 +138,39 @@
       return R * c;
     }
 
-    // ------- State & DOM -------
+    function debounce(fn, delay = 200) {
+      let t;
+      return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), delay); };
+    }
+
+    // ===================== State & DOM =====================
     const salesNameInput = document.getElementById("salesNameInput");
-    const salesNameSuggestions = document.getElementById("salesNameSuggestions");
+    const salesNameList = document.getElementById("salesNameList");
+    const salesNameSuggestions = document.getElementById("salesNameSuggestions"); // reserved
+
     const dealerInput = document.getElementById("dealerInput");
     const dealerSuggestions = document.getElementById("dealerSuggestions");
+    const dealerHint = document.getElementById("dealerHint");
+
     const dealerCoords = document.getElementById("dealerCoords");
     const myCoords = document.getElementById("myCoords");
     const distanceEl = document.getElementById("distance");
     const statusEl = document.getElementById("status");
+
     const getGPSBtn = document.getElementById("getGPS");
     const reloadBtn = document.getElementById("reload");
     const goCheckoutBtn = document.getElementById("goCheckout");
     const radiusInfo = document.getElementById("radiusInfo");
     const accInfo = document.getElementById("accInfo");
 
+    // ----- CSV sources -----
     const CSV_URL_DEALERS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vS3Hpp6N8pjYkRMy-Pi58yCxZB5o-rCdQfnBv0Z_vHMq6Uii5uxG60BnpQVcsyDTg-X9-A-HPodXhpT/pub?output=csv";
     const CSV_URL_SALESMEN = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTiHz0jejmmecSnTe5uK3Kwt_kx7HYcvMwRRQ_OeS1TA4evqMUwl8srVUe164DbJnxjYcuKuUsHQiFm/pub?gid=472318377&single=true&output=csv";
 
-    let DEALERS = []; 
+    // Optional: time sheet URL (REPLACE with your actual published CSV)
+    const SHEET_URL_TIME = ""; // e.g. "https://docs.google.com/spreadsheets/d/e/.../pub?output=csv"
+
+    let DEALERS = [];
     let SALESPEOPLE = [];
     let SELECTED_DEALER = null;
     let MY_LOC = null;
@@ -124,102 +179,105 @@
 
     radiusInfo.textContent = `Allowed radius: ${RADIUS_M} m`;
 
-    // ------- Load Dealers -------
+    // ===================== Load Dealers =====================
     async function loadDealers() {
-      dealerSuggestions.innerHTML = `<span class="muted">Loading dealers…</span>`;
+      dealerSuggestions.innerHTML = `<span class="spinner"></span><span class="muted">Loading dealers…</span>`;
+      dealerHint.textContent = "";
       try {
         const res = await fetch(CSV_URL_DEALERS, { cache: "no-store" });
         if (!res.ok) throw new Error("Cannot fetch dealer CSV");
         const text = await res.text();
         const rows = parseCSV(text);
-        const header = rows.shift().map(h => h.trim().toLowerCase());
-        const iName = header.indexOf("dealername");
-        const iLat = header.indexOf("latitude");
-        const iLng = header.indexOf("longitude");
+        if (!rows.length) throw new Error("Empty dealer CSV");
+
+        const header = normalizeHeaders(rows.shift());
+
+        // Accept flexible header names
+        const iName = header.findIndex(h => ["dealername","dealer name","name","dealer"].includes(h));
+        const iLat  = header.findIndex(h => ["latitude","lat"].includes(h));
+        const iLng  = header.findIndex(h => ["longitude","lng","lon","long"].includes(h));
 
         if (iName < 0 || iLat < 0 || iLng < 0) {
           throw new Error("CSV header must include DealerName, Latitude, Longitude");
         }
 
         DEALERS = rows.map(r => ({
-          name: (r[iName] || "").trim(),
-          lat: parseFloat(r[iLat]),
-          lng: parseFloat(r[iLng])
+          name: stripQuotesTrim(r[iName]),
+          lat: parseFloat(stripQuotesTrim(r[iLat])),
+          lng: parseFloat(stripQuotesTrim(r[iLng]))
         })).filter(d => d.name && Number.isFinite(d.lat) && Number.isFinite(d.lng));
 
         dealerSuggestions.innerHTML = `<span class="muted">${DEALERS.length} dealers loaded.</span>`;
+        dealerHint.textContent = "Type to search and tap a suggestion pill to select.";
       } catch (e) {
         dealerSuggestions.innerHTML = `<span class="err">Error: ${e.message}</span>`;
       }
     }
-    loadDealers();
-    reloadBtn.addEventListener("click", loadDealers);
 
-    // ------- Load Salespeople -------
+    // ===================== Load Salespeople =====================
     async function loadSalespeople() {
       try {
         const res = await fetch(CSV_URL_SALESMEN, { cache: "no-store" });
         if (!res.ok) throw new Error("Cannot fetch salespeople CSV");
         const text = await res.text();
         const rows = parseCSV(text);
-        const iName = rows[0].indexOf("Sales Name");
+        if (!rows.length) throw new Error("Empty salespeople CSV");
+
+        const header = normalizeHeaders(rows.shift());
+        const iName = header.findIndex(h => ["sales name","sales_name","salesname","name"].includes(h));
         if (iName < 0) throw new Error("CSV header must include 'Sales Name'");
 
-        SALESPEOPLE = rows.map(r => r[iName].trim()).filter(name => name);
-        SALESPEOPLE.forEach(name => {
-          const option = document.createElement("option");
-          option.value = name;
-          option.textContent = name;
-          salesNameInput.appendChild(option);
-        });
+        SALESPEOPLE = uniqueSorted(
+          rows.map(r => stripQuotesTrim(r[iName])).filter(Boolean)
+        );
+
+        // Populate datalist
+        salesNameList.innerHTML = SALESPEOPLE.map(n => `<option value="${n}">`).join("");
       } catch (e) {
         console.error("Error loading salespeople:", e.message);
       }
     }
+
+    // Initial loads
+    loadDealers();
     loadSalespeople();
+    reloadBtn.addEventListener("click", loadDealers);
 
-    // ------- Sales Name Suggestions -------
-    salesNameInput.addEventListener("input", () => {
-      const query = salesNameInput.value.toLowerCase();
-      const suggestions = SALESPEOPLE.filter(name => name.toLowerCase().includes(query));
-      displaySalesNameSuggestions(suggestions);
+    // ===================== Sales Name Selection =====================
+    salesNameInput.addEventListener("change", () => {
+      SALES_NAME = stripQuotesTrim(salesNameInput.value);
+      // Clear custom suggestions (unused now)
+      salesNameSuggestions.innerHTML = "";
+      computeDistance(); // may gate checkout if time-based logic uses name
     });
 
-    function displaySalesNameSuggestions(suggestions) {
-      salesNameSuggestions.innerHTML = suggestions
-        .map(name => `<div class="pill" onclick="selectSalesName('${name}')">${name}</div>`)
-        .join("");
-    }
-
-    function selectSalesName(name) {
-      salesNameInput.value = name;
-      salesNameSuggestions.innerHTML = ''; // Clear suggestions
-      SALES_NAME = name; // Update selected sales name
-    }
-
-    // ------- Dealer Name Suggestions -------
-    dealerInput.addEventListener("input", () => {
-      const query = dealerInput.value.toLowerCase();
-      const suggestions = DEALERS.filter(dealer => dealer.name.toLowerCase().includes(query));
-      displayDealerSuggestions(suggestions);
-    });
-
-    function displayDealerSuggestions(suggestions) {
+    // ===================== Dealer Name Suggestions =====================
+    const updateDealerSuggestions = debounce(() => {
+      const q = dealerInput.value.toLowerCase().trim();
+      if (!q) {
+        dealerSuggestions.innerHTML = "";
+        return;
+      }
+      const suggestions = DEALERS.filter(d => d.name.toLowerCase().includes(q)).slice(0, 50);
       dealerSuggestions.innerHTML = suggestions
-        .map(dealer => `<div class="pill" onclick="selectDealer('${dealer.name}')">${dealer.name}</div>`)
-        .join("");
-    }
+        .map(d => `<div class="pill" onclick="selectDealer('${escJS(d.name)}')">${d.name}</div>`)
+        .join("") || `<span class="muted">No matches.</span>`;
+    }, 150);
 
-    function selectDealer(dealerName) {
-      const selected = DEALERS.find(dealer => dealer.name === dealerName);
+    dealerInput.addEventListener("input", updateDealerSuggestions);
+
+    // Expose for inline onclick
+    window.selectDealer = function(dealerName) {
+      const selected = DEALERS.find(d => d.name === dealerName);
+      if (!selected) return;
       SELECTED_DEALER = selected;
       dealerInput.value = dealerName;
-      dealerSuggestions.innerHTML = ''; // Clear suggestions
-      dealerCoords.value = `${selected.lat}, ${selected.lng}`; // Show coordinates
-      computeDistance(); // Calculate distance after selecting dealer
-    }
+      dealerSuggestions.innerHTML = '';
+      dealerCoords.value = `${selected.lat}, ${selected.lng}`;
+      computeDistance();
+    };
 
-    // ------- Geolocation -------
+    // ===================== Geolocation =====================
     getGPSBtn.addEventListener("click", () => {
       if (!navigator.geolocation) {
         statusEl.value = "Geolocation not supported";
@@ -227,6 +285,7 @@
         return;
       }
       statusEl.value = "Requesting location…";
+      statusEl.className = "";
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           MY_LOC = { lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy };
@@ -243,31 +302,67 @@
       );
     });
 
-    // ------- Time Check ------- 
+    // ===================== Time Check (optional) =====================
     async function checkTimeSpent() {
-      const dealer = SELECTED_DEALER.name;
-      const date = new Date().toLocaleDateString(); // Today date in MM/DD/YYYY
-      const trigger = `${date}${SALES_NAME}${dealer}`;
-      const response = await fetch(SHEET_URL_TIME);
-      const text = await response.text();
-      const rows = parseCSV(text);
-      const triggerIndex = rows.findIndex(row => row[9] === trigger);
-      if (triggerIndex === -1) {
-        return false; // No match, or not enough time spent
+      // If you don't use time gating, just return true.
+      if (!SHEET_URL_TIME) return true;
+
+      if (!SELECTED_DEALER || !SALES_NAME) return false;
+
+      try {
+        const dealer = SELECTED_DEALER.name;
+        // Use ISO date for a reliable key; adjust to your sheet logic:
+        const date = new Date();
+        const y = date.getFullYear();
+        const m = String(date.getMonth() + 1).padStart(2, '0');
+        const d = String(date.getDate()).padStart(2, '0');
+        const dateKey = `${y}-${m}-${d}`; // e.g., 2025-10-01
+
+        const trigger = `${dateKey}${SALES_NAME}${dealer}`;
+
+        const response = await fetch(SHEET_URL_TIME, { cache: "no-store" });
+        if (!response.ok) throw new Error("Cannot fetch time CSV");
+        const text = await response.text();
+        const rows = parseCSV(text);
+
+        // Adjust the indices below to your actual sheet layout:
+        // Example assumes:
+        // - trigger column at index 9
+        // - time spent (minutes) at index 10
+        const TRIGGER_COL = 9;
+        const TIME_COL = 10;
+
+        const match = rows.find(row => stripQuotesTrim(row[TRIGGER_COL]) === trigger);
+        if (!match) return false;
+
+        const timeSpent = parseInt(stripQuotesTrim(match[TIME_COL]), 10);
+        return Number.isFinite(timeSpent) && timeSpent >= 15; // >= 15 minutes
+      } catch (e) {
+        console.error("Time check error:", e);
+        // Fail-closed: do not allow checkout if time cannot be verified
+        return false;
       }
-      const timeSpent = rows[triggerIndex][10]; // Time spent column
-      return parseInt(timeSpent) >= 15; // At least 15 minutes
     }
 
+    // ===================== Distance + Gate =====================
     async function computeDistance() {
+      // Gate text if something missing
       if (!SELECTED_DEALER || !MY_LOC) { updateGate(); return; }
+
       const dist = Math.round(haversineMeters(MY_LOC.lat, MY_LOC.lng, SELECTED_DEALER.lat, SELECTED_DEALER.lng));
       distanceEl.value = dist;
+
       const isValidLocation = dist <= RADIUS_M;
       statusEl.value = isValidLocation ? "WITHIN RADIUS" : "OUT OF RADIUS";
       statusEl.className = isValidLocation ? "ok" : "warn";
-      const isValidTime = await checkTimeSpent();
-      goCheckoutBtn.disabled = !isValidLocation || !isValidTime;
+
+      // Only check time if location is valid (saves network)
+      let isValidTime = true;
+      if (isValidLocation) {
+        isValidTime = await checkTimeSpent();
+      }
+
+      goCheckoutBtn.disabled = !(isValidLocation && isValidTime);
     }
 
     function updateGate() {
@@ -281,9 +376,10 @@
       distanceEl.value = "";
     }
 
+    // ===================== Checkout =====================
     goCheckoutBtn.addEventListener("click", () => {
       if (goCheckoutBtn.disabled) return;
-      // Redirect to the checkout page
+      // TODO: replace with your real checkout URL
       window.location.href = "https://your-checkout-page.com";
     });
   </script>
