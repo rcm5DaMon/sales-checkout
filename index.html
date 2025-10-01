@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Sales Location & Time Check</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, Arial, sans-serif; margin: 24px; }
+    .card { max-width: 760px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 12px; }
+    h2 { margin-top: 0; }
+    label { display:block; margin: 12px 0 6px; font-weight: 600; }
+    input, button { padding: 10px; width: 100%; box-sizing: border-box; }
+    button { cursor: pointer; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .ok { color: #0a7b22; font-weight: 700; }
+    .warn { color: #b45309; font-weight: 700; }
+    .err { color: #b91c1c; font-weight: 700; }
+    .muted { color: #666; font-size: 0.92rem; }
+    .badge { display:inline-block; padding:2px 8px; border:1px solid #ddd; border-radius: 999px; margin-left:8px; font-size: 0.85rem; }
+    .pill { display:inline-block; padding:6px 10px; border:1px solid #ddd; border-radius:999px; margin:6px 6px 0 0; cursor:pointer; }
+    .hidden { display:none; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Sales Location & Time Check</h2>
+    <p class="muted">Input your name and select dealer to check your location and time spent at the dealer.</p>
+
+    <!-- Sales Name -->
+    <label for="salesNameInput">Sales Name</label>
+    <input id="salesNameInput" type="text" placeholder="Enter your name" autocomplete="off" />
+
+    <!-- Dealer Name -->
+    <label for="dealerInput">Search dealer by name</label>
+    <input id="dealerInput" type="text" placeholder="Type dealer name…" autocomplete="off">
+    <div id="dealerSuggestions"></div>
+
+    <!-- Coordinates -->
+    <div class="row" style="margin-top:8px;">
+      <div>
+        <label>Dealer Coordinates</label>
+        <input id="dealerCoords" type="text" disabled placeholder="—" />
+      </div>
+      <div>
+        <label>Your Live GPS</label>
+        <input id="myCoords" type="text" disabled placeholder="—" />
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label>Distance to Dealer (meters)</label>
+        <input id="distance" type="text" disabled placeholder="—" />
+      </div>
+      <div>
+        <label>Status</label>
+        <input id="status" type="text" disabled placeholder="—" />
+      </div>
+    </div>
+
+    <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-top:10px;">
+      <button id="getGPS">Get My Location</button>
+      <button id="reload">Reload Dealer List</button>
+      <button id="goCheckout" disabled>Go to Checkout</button>
+    </div>
+
+    <div style="margin-top:8px;">
+      <span id="radiusInfo" class="badge"></span>
+      <span id="accInfo" class="badge hidden"></span>
+    </div>
+
+    <p class="muted" style="margin-top:12px;">
+      Tip: Allow location permission and use a phone outdoors for better accuracy.
+    </p>
+  </div>
+
+  <script>
+    // ------- Utilities -------
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+    function parseCSV(text) {
+      return text.trim().split(/\r?\n/).map(line => line.split(","));
+    }
+
+    function haversineMeters(lat1, lon1, lat2, lon2) {
+      const R = 6371000; 
+      const toRad = d => d * Math.PI / 180;
+      const dLat = toRad(lat2 - lat1);
+      const dLon = toRad(lon2 - lon1);
+      const a = Math.sin(dLat/2)**2 +
+                Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+                Math.sin(dLon/2)**2;
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      return R * c;
+    }
+
+    // ------- State & DOM -------
+    const salesNameInput = document.getElementById("salesNameInput");
+    const dealerInput = document.getElementById("dealerInput");
+    const dealerSuggestions = document.getElementById("dealerSuggestions");
+    const dealerCoords = document.getElementById("dealerCoords");
+    const myCoords = document.getElementById("myCoords");
+    const distanceEl = document.getElementById("distance");
+    const statusEl = document.getElementById("status");
+    const getGPSBtn = document.getElementById("getGPS");
+    const reloadBtn = document.getElementById("reload");
+    const goCheckoutBtn = document.getElementById("goCheckout");
+    const radiusInfo = document.getElementById("radiusInfo");
+    const accInfo = document.getElementById("accInfo");
+
+    const CSV_URL_DEALERS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vS3Hpp6N8pjYkRMy-Pi58yCxZB5o-rCdQfnBv0Z_vHMq6Uii5uxG60BnpQVcsyDTg-X9-A-HPodXhpT/pub?output=csv";
+    const SHEET_URL_TIME = "https://docs.google.com/spreadsheets/d/1BqrlzaARh3wJZ3sHeUp22LV-SdcsmSJ2rzKfruGz80U/edit?resourcekey=&gid=1647008010";
+    const RADIUS_M = 50; // 50 meters radius
+
+    let DEALERS = []; 
+    let SELECTED_DEALER = null;
+    let MY_LOC = null;
+    let SALES_NAME = "";
+
+    radiusInfo.textContent = `Allowed radius: ${RADIUS_M} m`;
+
+    // ------- Load Dealers -------
+    async function loadDealers() {
+      dealerSuggestions.innerHTML = `<span class="muted">Loading dealers…</span>`;
+      try {
+        const res = await fetch(CSV_URL_DEALERS, { cache: "no-store" });
+        if (!res.ok) throw new Error("Cannot fetch dealer CSV");
+        const text = await res.text();
+        const rows = parseCSV(text);
+        const header = rows.shift().map(h => h.trim().toLowerCase());
+        const iName = header.indexOf("dealername");
+        const iLat = header.indexOf("latitude");
+        const iLng = header.indexOf("longitude");
+
+        if (iName < 0 || iLat < 0 || iLng < 0) {
+          throw new Error("CSV header must include DealerName, Latitude, Longitude");
+        }
+
+        DEALERS = rows.map(r => ({
+          name: (r[iName] || "").trim(),
+          lat: parseFloat(r[iLat]),
+          lng: parseFloat(r[iLng])
+        })).filter(d => d.name && Number.isFinite(d.lat) && Number.isFinite(d.lng));
+
+        dealerSuggestions.innerHTML = `<span class="muted">${DEALERS.length} dealers loaded.</span>`;
+      } catch (e) {
+        dealerSuggestions.innerHTML = `<span class="err">Error: ${e.message}</span>`;
+      }
+    }
+    loadDealers();
+    reloadBtn.addEventListener("click", loadDealers);
+
+    // ------- Autocomplete for Dealer Input -------
+    let lastQuery = "";
+    dealerInput.addEventListener("input", async (e) => {
+      const q = e.target.value.trim().toLowerCase();
+      lastQuery = q;
+
+      if (!q) {
+        SELECTED_DEALER = null;
+        dealerCoords.value = "";
+        dealerSuggestions.innerHTML = "";
+        updateGate();
+        return;
+      }
+
+      await sleep(60);
+      if (q !== lastQuery) return;
+
+      const list = DEALERS.filter(d => d.name.toLowerCase().includes(q)).slice(0, 8);
+      if (list.length === 1 && list[0].name.toLowerCase() === q) {
+        setSelectedDealer(list[0]);
+        dealerSuggestions.innerHTML = "";
+        return;
+      }
+
+      if (!list.length) {
+        dealerSuggestions.innerHTML = `<span class="muted">No match.</span>`;
+        return;
+      }
+
+      dealerSuggestions.innerHTML = list.map(d =>
+        `<span class="pill" data-name="${encodeURIComponent(d.name)}">${d.name}</span>`
+      ).join("");
+      dealerSuggestions.querySelectorAll("[data-name]").forEach(el => {
+        el.addEventListener("click", () => {
+          const name = decodeURIComponent(el.getAttribute("data-name"));
+          const d = DEALERS.find(x => x.name === name);
+          if (d) {
+            dealerInput.value = d.name;
+            setSelectedDealer(d);
+            dealerSuggestions.innerHTML = "";
+          }
+        });
+      });
+    });
+
+    function setSelectedDealer(d) {
+      SELECTED_DEALER = d;
+      dealerCoords.value = `${d.lat.toFixed(6)}, ${d.lng.toFixed(6)}`;
+      computeDistance();
+    }
+
+    // ------- Geolocation -------
+    getGPSBtn.addEventListener("click", () => {
+      if (!navigator.geolocation) {
+        statusEl.value = "Geolocation not supported";
+        statusEl.className = "err";
+        return;
+      }
+      statusEl.value = "Requesting location…";
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          MY_LOC = { lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy };
+          myCoords.value = `${MY_LOC.lat.toFixed(6)}, ${MY_LOC.lng.toFixed(6)} (±${Math.round(MY_LOC.acc)} m)`;
+          accInfo.textContent = `Accuracy: ±${Math.round(MY_LOC.acc)} m`;
+          accInfo.classList.remove("hidden");
+          computeDistance();
+        },
+        (err) => {
+          statusEl.value = `Location error: ${err.message}`;
+          statusEl.className = "err";
+        },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+      );
+    });
+
+    // ------- Time Check ------- 
+    async function checkTimeSpent() {
+      const dealer = SELECTED_DEALER.name;
+      const date = new Date().toLocaleDateString(); // Today date in MM/DD/YYYY
+      const trigger = `${date}${SALES_NAME}${dealer}`;
+      const response = await fetch(SHEET_URL_TIME);
+      const text = await response.text();
+      const rows = parseCSV(text);
+      const triggerIndex = rows.findIndex(row => row[9] === trigger);
+      if (triggerIndex === -1) {
+        return false; // No match, or not enough time spent
+      }
+      const timeSpent = rows[triggerIndex][10]; // Time spent column
+      return parseInt(timeSpent) >= 15; // At least 15 minutes
+    }
+
+    async function computeDistance() {
+      if (!SELECTED_DEALER || !MY_LOC) { updateGate(); return; }
+      const dist = Math.round(haversineMeters(MY_LOC.lat, MY_LOC.lng, SELECTED_DEALER.lat, SELECTED_DEALER.lng));
+      distanceEl.value = dist;
+      const isValidLocation = dist <= RADIUS_M;
+      statusEl.value = isValidLocation ? "WITHIN RADIUS" : "OUT OF RADIUS";
+      statusEl.className = isValidLocation ? "ok" : "warn";
+      const isValidTime = await checkTimeSpent();
+      goCheckoutBtn.disabled = !isValidLocation || !isValidTime;
+    }
+
+    function updateGate() {
+      const needDealer = !SELECTED_DEALER;
+      const needGPS = !MY_LOC;
+      if (needDealer && needGPS) { statusEl.value = "Select dealer & get GPS"; }
+      else if (needDealer)       { statusEl.value = "Select dealer"; }
+      else if (needGPS)          { statusEl.value = "Get GPS"; }
+      statusEl.className = "";
+      goCheckoutBtn.disabled = true;
+      distanceEl.value = "";
+    }
+
+    goCheckoutBtn.addEventListener("click", () => {
+      if (goCheckoutBtn.disabled) return;
+      // Redirect to the checkout page
+      window.location.href = "https://your-checkout-page.com";
+    });
+  </script>
+</body>
+</html>
