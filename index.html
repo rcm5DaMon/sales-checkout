@@ -74,6 +74,18 @@
       </div>
     </div>
 
+    <!-- NEW: Jam Login field -->
+    <div class="row">
+      <div>
+        <label>Jam Login (HH:MM)</label>
+        <input id="loginTime" type="text" disabled placeholder="—" />
+      </div>
+      <div>
+        <!-- empty cell to keep grid balance -->
+      </div>
+    </div>
+    <!-- /NEW -->
+
     <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-top:10px;">
       <button id="getGPS">Get My Location</button>
       <button id="reload">Reload Dealer List</button>
@@ -104,10 +116,8 @@
         } else {
           if (c === '"') { inQuotes = true; }
           else if (c === ',') { row.push(cell); cell = ''; }
-          else if (c === '
-') { row.push(cell); rows.push(row); row = []; cell = ''; }
-          else if (c === '
-') { /* ignore CR */ }
+          else if (c === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
+          else if (c === '\r') { /* ignore CR */ }
           else { cell += c; }
         }
       }
@@ -117,7 +127,7 @@
     const stripQuotesTrim = (s) => String(s ?? '').replace(/^"+|"+$/g, '').trim();
     const normalizeHeaders = (arr) => arr.map(h => stripQuotesTrim(h).toLowerCase());
     const uniqueSorted = (arr) => [...new Set(arr)].sort((a,b)=>a.localeCompare(b));
-    const escJS = (s) => String(s).replace(/\/g, "\\").replace(/'/g, "\'");
+    const escJS = (s) => String(s).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
     function haversineMeters(lat1, lon1, lat2, lon2) {
       const R = 6371000;
       const toRad = d => d * Math.PI / 180;
@@ -145,6 +155,7 @@
     const goCheckoutBtn = document.getElementById("goCheckout");
     const radiusInfo = document.getElementById("radiusInfo");
     const accInfo = document.getElementById("accInfo");
+    const loginTimeEl = document.getElementById("loginTime"); // NEW
 
     const CSV_URL_DEALERS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vS3Hpp6N8pjYkRMy-Pi58yCxZB5o-rCdQfnBv0Z_vHMq6Uii5uxG60BnpQVcsyDTg-X9-A-HPodXhpT/pub?output=csv";
     const CSV_URL_SALESMEN = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTiHz0jejmmecSnTe5uK3Kwt_kx7HYcvMwRRQ_OeS1TA4evqMUwl8srVUe164DbJnxjYcuKuUsHQiFm/pub?gid=472318377&single=true&output=csv";
@@ -157,7 +168,7 @@
     let SALES_NAME = "";
 
     // Working radius (meters)
-    const RADIUS_M = 100; // ← adjust as needed
+    const RADIUS_M = 50000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000; // ← adjust as needed
     radiusInfo.textContent = `Allowed radius: ${RADIUS_M.toLocaleString()} m`;
 
     // ============== Load Dealers ==============
@@ -225,13 +236,13 @@
     document.addEventListener("click", (e) => {
       if (!salesNameSuggestions.contains(e.target) && e.target !== salesNameInput) {
         // optionally collapse
-        // salesNameSuggestions.innerHTML = "";
       }
     });
     window.selectSalesName = function(name) {
       SALES_NAME = name;
       salesNameInput.value = name;
       computeDistance();
+      maybeLookupLoginTime(); // NEW
     };
 
     // ============== Dealer Suggestions (pills) ==============
@@ -252,6 +263,7 @@
       dealerInput.value = dealerName;
       dealerCoords.value = `${selected.lat}, ${selected.lng}`;
       computeDistance();
+      maybeLookupLoginTime(); // NEW
     };
 
     // ============== Geolocation ==============
@@ -270,6 +282,8 @@
           accInfo.textContent = `Accuracy: ±${Math.round(MY_LOC.acc)} m`;
           accInfo.classList.remove("hidden");
           computeDistance();
+          // NEW: show Jam Login after GPS is obtained (as requested)
+          maybeLookupLoginTime();
         },
         (err) => {
           statusEl.value = `Location error: ${err.message}`;
@@ -295,7 +309,8 @@
         if (!response.ok) throw new Error("Cannot fetch time CSV");
         const text = await response.text();
         const rows = parseCSV(text);
-        const TRIGGER_COL = 9, TIME_COL = 10; // adjust to your sheet
+        // Keep your previous fixed columns for time spent (adjust if needed)
+        const TRIGGER_COL = 9, TIME_COL = 10; // 0-based (as in your previous code comment)
         const match = rows.find(r => stripQuotesTrim(r[TRIGGER_COL]) === trigger);
         if (!match) return false;
         const timeSpent = parseInt(stripQuotesTrim(match[TIME_COL]), 10);
@@ -306,6 +321,71 @@
       }
     }
 
+    // ============== Jam Login Lookup (NEW) ==============
+    async function lookupLoginTime() {
+      // Requires Sales, Dealer, and GPS click (per your requirement, we call it after GPS)
+      if (!SHEET_URL_TIME || !SELECTED_DEALER || !SALES_NAME) return;
+
+      // Build same trigger you already use
+      const now = new Date();
+      const y = now.getFullYear();
+      const m = String(now.getMonth() + 1).padStart(2, '0');
+      const d = String(now.getDate()).padStart(2, '0');
+      const trigger = `${m}/${d}/${y}${SALES_NAME}${SELECTED_DEALER.name}`;
+
+      loginTimeEl.value = "—"; // reset
+
+      try {
+        const res = await fetch(SHEET_URL_TIME, { cache: "no-store" });
+        if (!res.ok) throw new Error("Cannot fetch time CSV");
+        const text = await res.text();
+        const rows = parseCSV(text);
+        if (!rows.length) return;
+
+        // Identify columns by header where possible
+        const header = normalizeHeaders(rows.shift());
+
+        // Find trigger column by header name if present; else fallback to your prior index (9)
+        let triggerIdx = header.indexOf("trigger");
+        if (triggerIdx < 0) triggerIdx = 9; // fallback to previous assumption
+
+        // Find Jam Login column by header name; else fallback to #7 (1-based) => index 6 (0-based)
+        let jamLoginIdx = header.indexOf("jam login");
+        if (jamLoginIdx < 0) {
+          jamLoginIdx = 7; // fallback to 7th column (0-based)
+        }
+
+        const row = rows.find(r => stripQuotesTrim(r[triggerIdx]) === trigger);
+        if (!row) return;
+
+        const jamRaw = stripQuotesTrim(row[jamLoginIdx] ?? "");
+        const isHHMM = /^[0-2]?\d:[0-5]\d$/.test(jamRaw); // simple HH:MM guard
+        if (isHHMM) {
+          loginTimeEl.value = jamRaw;
+        } else if (jamRaw) {
+          // attempt to coerce common Excel time formats (e.g., 0.5 days)
+          const num = Number(jamRaw);
+          if (Number.isFinite(num) && num >= 0 && num < 1) {
+            const totalMinutes = Math.round(num * 24 * 60);
+            const hh = String(Math.floor(totalMinutes / 60)).padStart(2, '0');
+            const mm = String(totalMinutes % 60).padStart(2, '0');
+            loginTimeEl.value = `${hh}:${mm}`;
+          } else {
+            loginTimeEl.value = jamRaw; // show raw if already a human-readable time
+          }
+        }
+      } catch (e) {
+        console.error("Jam Login lookup error:", e);
+        // leave as "—"
+      }
+    }
+
+    function maybeLookupLoginTime() {
+      // Only show Jam Login after user pressed Get My Location (per requirement)
+      if (MY_LOC && SELECTED_DEALER && SALES_NAME) {
+        lookupLoginTime();
+      }
+    }
     // ============== Distance + Gate ==============
     async function computeDistance() {
       if (!SELECTED_DEALER || !MY_LOC) { updateGate(); return; }
