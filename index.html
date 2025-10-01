@@ -76,6 +76,13 @@
       </div>
     </div>
 
+    <div class="row">
+      <div>
+        <label>Sales Login Time</label>
+        <input id="loginTime" type="text" disabled placeholder="—" />
+      </div>
+    </div>
+
     <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-top:10px;">
       <button id="getGPS">Get My Location</button>
       <button id="reload">Reload Dealer List</button>
@@ -164,6 +171,7 @@
     const myCoords = document.getElementById("myCoords");
     const distanceEl = document.getElementById("distance");
     const statusEl = document.getElementById("status");
+    const loginTimeEl = document.getElementById("loginTime");
 
     const getGPSBtn = document.getElementById("getGPS");
     const reloadBtn = document.getElementById("reload");
@@ -341,6 +349,8 @@
         if (!match) return false;
 
         const loginTime = new Date(stripQuotesTrim(match[LOGIN_TIME_COL]));
+        loginTimeEl.value = loginTime.toISOString().slice(0, 19).replace("T", " ");  // Show the login time
+
         const currentTime = new Date();
 
         // Calculate the difference in minutes
