@@ -65,14 +65,12 @@
       </div>
     </div>
 
-    <!-- Buttons -->
     <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-top:10px;">
       <button id="getGPS">Get My Location</button>
       <button id="reload">Reload Dealer List</button>
       <button id="goCheckout" disabled>Go to Checkout</button>
     </div>
 
-    <!-- Info badges -->
     <div style="margin-top:8px;">
       <span id="radiusInfo" class="badge"></span>
       <span id="accInfo" class="badge hidden"></span>
@@ -115,6 +113,7 @@
       const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon/2)**2;
       const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); return R * c;
     }
+    function debounce(fn, delay = 200) { let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), delay); }; }
 
     // ===================== State =====================
     const salesNameInput = document.getElementById("salesNameInput");
@@ -137,8 +136,8 @@
     const SHEET_URL_TIME = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQQSE39NKkvwxpJz1O8QxCFuudjvn2CJY3nyYyq-4pdi5XNU3nhsHMaMVemNxFqazjcPYt51_EZ0g8r/pub?gid=1647008010&single=true&output=csv";
 
     let DEALERS = [], SALESPEOPLE = [], SELECTED_DEALER = null, MY_LOC = null, SALES_NAME = "";
-    const RADIUS_M = 500000000000000000000000000000000000000000000000000000; // meters
-    const MIN_TIME_MINUTES = 2; // required time
+    const RADIUS_M = 500; // meters
+    const MIN_TIME_MINUTES = 15;
     radiusInfo.textContent = `Allowed radius: ${RADIUS_M} m`;
 
     // ===================== Loaders =====================
@@ -163,12 +162,44 @@
         dealerSuggestions.innerHTML = `<span class="err">Error: ${e.message}</span>`;
       }
     }
-    loadDealers();
+    async function loadSalespeople() {
+      try {
+        const res = await fetch(CSV_URL_SALESMEN, { cache: "no-store" });
+        const text = await res.text();
+        const rows = parseCSV(text);
+        const header = normalizeHeaders(rows.shift());
+        const iName = header.findIndex(h => ["sales name","sales_name","salesname","name"].includes(h));
+        SALESPEOPLE = uniqueSorted(rows.map(r => stripQuotesTrim(r[iName])).filter(Boolean));
+        salesNameList.innerHTML = SALESPEOPLE.map(n => `<option value="${n}">`).join("");
+      } catch (e) { console.error("Error loading salespeople:", e.message); }
+    }
+    loadDealers(); loadSalespeople();
     reloadBtn.addEventListener("click", loadDealers);
+
+    // ===================== Dealer Suggestions =====================
+    const updateDealerSuggestions = debounce(() => {
+      const q = dealerInput.value.toLowerCase().trim();
+      if (!q) { dealerSuggestions.innerHTML = ""; return; }
+      const suggestions = DEALERS.filter(d => d.name.toLowerCase().includes(q)).slice(0, 50);
+      dealerSuggestions.innerHTML = suggestions
+        .map(d => `<div class="pill" onclick="selectDealer('${escJS(d.name)}')">${d.name}</div>`)
+        .join("") || `<span class="muted">No matches.</span>`;
+    }, 150);
+    dealerInput.addEventListener("input", updateDealerSuggestions);
+
+    window.selectDealer = function(dealerName) {
+      const selected = DEALERS.find(d => d.name === dealerName);
+      if (!selected) return;
+      SELECTED_DEALER = selected;
+      dealerInput.value = dealerName;
+      dealerSuggestions.innerHTML = '';
+      dealerCoords.value = `${selected.lat}, ${selected.lng}`;
+      computeDistance();
+    };
 
     // ===================== Time Check =====================
     async function checkTimeSpent() {
-      if (!SHEET_URL_TIME) return false;
+      if (!SHEET_URL_TIME) return true;
       if (!SELECTED_DEALER || !SALES_NAME) return false;
       try {
         const dealer = SELECTED_DEALER.name;
@@ -183,8 +214,8 @@
         const text = await response.text();
         const rows = parseCSV(text);
 
-        const TRIGGER_COL = 9;
-        const TIME_COL = 10;
+        const TRIGGER_COL = 9; // 10th column
+        const TIME_COL = 10;   // 11th column
 
         const match = rows.find(row => stripQuotesTrim(row[TRIGGER_COL]) === trigger);
         if (!match) return false;
@@ -197,43 +228,54 @@
       }
     }
 
-    // ===================== GPS + Distance + Time =====================
+    // ===================== Distance + Gate =====================
+    async function computeDistance() {
+      if (!SELECTED_DEALER || !MY_LOC) { updateGate(); return; }
+      const dist = Math.round(haversineMeters(MY_LOC.lat, MY_LOC.lng, SELECTED_DEALER.lat, SELECTED_DEALER.lng));
+      distanceEl.value = dist;
+      const isValidLocation = dist <= RADIUS_M;
+      const isValidTime = await checkTimeSpent();
+
+      if (isValidLocation && isValidTime) {
+        statusEl.value = "✅ WITHIN RADIUS & Time ≥ 15 min";
+        statusEl.className = "ok";
+        goCheckoutBtn.disabled = false;
+      } else {
+        goCheckoutBtn.disabled = true;
+        if (!isValidLocation && !isValidTime) {
+          statusEl.value = "❌ Out of radius AND time spent < 15 min";
+        } else if (!isValidLocation) {
+          statusEl.value = "❌ Not within radius";
+        } else if (!isValidTime) {
+          statusEl.value = "❌ Time spent < 15 min";
+        }
+        statusEl.className = "err";
+      }
+    }
+
+    function updateGate() {
+      if (!SELECTED_DEALER && !MY_LOC) statusEl.value = "Select dealer & get GPS";
+      else if (!SELECTED_DEALER) statusEl.value = "Select dealer";
+      else if (!MY_LOC) statusEl.value = "Get GPS";
+      statusEl.className = "";
+      goCheckoutBtn.disabled = true;
+      distanceEl.value = "";
+    }
+
     getGPSBtn.addEventListener("click", () => {
+      if (!navigator.geolocation) {
+        statusEl.value = "Geolocation not supported";
+        statusEl.className = "err";
+        return;
+      }
+      statusEl.value = "Requesting location…";
       navigator.geolocation.getCurrentPosition(
-        async (pos) => {
+        (pos) => {
           MY_LOC = { lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy };
           myCoords.value = `${MY_LOC.lat.toFixed(6)}, ${MY_LOC.lng.toFixed(6)} (±${Math.round(MY_LOC.acc)} m)`;
           accInfo.textContent = `Accuracy: ±${Math.round(MY_LOC.acc)} m`;
           accInfo.classList.remove("hidden");
-
-          if (!SELECTED_DEALER) {
-            statusEl.value = "❌ Please select a dealer first.";
-            statusEl.className = "err";
-            return;
-          }
-
-          const dist = Math.round(haversineMeters(MY_LOC.lat, MY_LOC.lng, SELECTED_DEALER.lat, SELECTED_DEALER.lng));
-          distanceEl.value = dist;
-          const isValidLocation = dist <= RADIUS_M;
-          const isValidTime = await checkTimeSpent();
-
-          if (isValidLocation && isValidTime) {
-            statusEl.value = "✅ WITHIN RADIUS & Time ≥ 15 min";
-            statusEl.className = "ok";
-            goCheckoutBtn.disabled = false;
-          } else {
-            goCheckoutBtn.disabled = true;
-            if (!isValidLocation && !isValidTime) {
-              statusEl.value = "❌ Out of radius AND time spent < 15 min";
-              statusEl.className = "err";
-            } else if (!isValidLocation) {
-              statusEl.value = "❌ Not within radius";
-              statusEl.className = "err";
-            } else if (!isValidTime) {
-              statusEl.value = "❌ Time spent < 15 min";
-              statusEl.className = "err";
-            }
-          }
+          computeDistance();
         },
         (err) => {
           statusEl.value = `Location error: ${err.message}`;
