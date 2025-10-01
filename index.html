@@ -1,71 +1,388 @@
-// ===== Jam Login lookup (pick the LATEST time on the sheet) =====
-async function lookupLoginTime() {
-  if (!SHEET_URL_TIME || !SELECTED_DEALER || !SALES_NAME) return;
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Sales Location & Time Check</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, Arial, sans-serif; margin: 24px; }
+    .card { max-width: 760px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 12px; }
+    h2 { margin-top: 0; }
+    label { display:block; margin: 12px 0 6px; font-weight: 600; }
+    input, select, button { padding: 10px; width: 100%; box-sizing: border-box; }
+    input[disabled] { background: rgba(127,127,127,.08); }
+    button { cursor: pointer; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .ok { color: #0a7b22; font-weight: 700; }
+    .warn { color: #b45309; font-weight: 700; }
+    .err { color: #b91c1c; font-weight: 700; }
+    .muted { color: #666; font-size: 0.92rem; }
+    .badge { display:inline-block; padding:2px 8px; border:1px solid #ddd; border-radius: 999px; margin-left:8px; font-size: 0.85rem; }
+    .pill { display:inline-block; padding:6px 10px; border:1px solid #ddd; border-radius:999px; margin:6px 6px 0 0; cursor:pointer; user-select:none; }
+    .hint { font-size: .85rem; color: #555; margin-top: 4px; }
+    .spinner { display:inline-block; width: 14px; height: 14px; border:2px solid #bbb; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: -2px; margin-right:6px;}
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .sugg-box { margin-top: 6px; }
+    .sugg-title { font-size:.85rem; color:#555; margin: 4px 0; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Sales Location & Time Check</h2>
+    <p class="muted">Input your name and select dealer to check your location and time spent at the dealer.</p>
 
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, '0');
-  const d = String(now.getDate()).padStart(2, '0');
-  const trigger = `${m}/${d}/${y}${SALES_NAME}${SELECTED_DEALER.name}`;
+    <!-- Sales Name -->
+    <label for="salesNameInput">Sales Name</label>
+    <input id="salesNameInput" type="text" placeholder="Type sales name..." list="salesNameList" autocomplete="off" />
+    <datalist id="salesNameList"></datalist>
+    <div class="sugg-box">
+      <div class="sugg-title">Suggestions</div>
+      <div id="salesNameSuggestions"></div>
+    </div>
 
-  loginTimeEl.value = "—";
-  loginDeltaMinEl.value = "—";
+    <!-- Dealer Name -->
+    <label for="dealerInput">Search dealer by name</label>
+    <input id="dealerInput" type="text" placeholder="Type dealer name…" autocomplete="off" />
+    <div class="sugg-box">
+      <div class="sugg-title">Matched Dealers</div>
+      <div id="dealerSuggestions"></div>
+    </div>
+    <div class="hint" id="dealerHint" aria-live="polite"></div>
 
-  try {
-    const res = await fetch(SHEET_URL_TIME, { cache: "no-store" });
-    if (!res.ok) throw new Error("Cannot fetch time CSV");
-    const text = await res.text();
-    const rows = parseCSV(text);
-    if (!rows.length) return;
+    <!-- Coordinates -->
+    <div class="row" style="margin-top:8px;">
+      <div>
+        <label>Dealer Coordinates</label>
+        <input id="dealerCoords" type="text" disabled placeholder="—" />
+      </div>
+      <div>
+        <label>Your Live GPS</label>
+        <input id="myCoords" type="text" disabled placeholder="—" />
+      </div>
+    </div>
 
-    const header = normalizeHeaders(rows.shift());
-    let triggerIdx  = header.indexOf("trigger");   if (triggerIdx  < 0) triggerIdx  = 9; // fallback
-    let jamLoginIdx = header.indexOf("jam login"); if (jamLoginIdx < 0) jamLoginIdx = 6; // fallback
+    <div class="row">
+      <div>
+        <label>Distance to Dealer (meters)</label>
+        <input id="distance" type="text" disabled placeholder="—" />
+      </div>
+      <div>
+        <label>Status</label>
+        <input id="status" type="text" disabled placeholder="—" aria-live="polite" />
+      </div>
+    </div>
 
-    // Collect all matching rows for today's trigger
-    const matches = rows.filter(r => stripQuotesTrim(r[triggerIdx]) === trigger);
-    if (!matches.length) return;
+    <!-- Jam Login + Time Since Login -->
+    <div class="row">
+      <div>
+        <label>Jam Login (HH:MM)</label>
+        <input id="loginTime" type="text" disabled placeholder="—" />
+      </div>
+      <div>
+        <label>Time Since Login (minutes)</label>
+        <input id="loginDeltaMin" type="text" disabled placeholder="—" />
+      </div>
+    </div>
 
-    // Helper: parse Jam Login into minutes since midnight (0..1439); return null if invalid
-    const toMinutes = (raw) => {
-      const s = stripQuotesTrim(raw ?? "");
-      if (/^[0-2]?\d:[0-5]\d$/.test(s)) {
-        const [H, M] = s.split(":").map(n => parseInt(n, 10));
-        if (H >= 0 && H <= 23 && M >= 0 && M <= 59) return H * 60 + M;
-        return null;
+    <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-top:10px;">
+      <button id="getGPS">Get My Location</button>
+      <button id="reload">Reload Dealer List</button>
+      <button id="goCheckout" disabled>Go to Checkout</button>
+    </div>
+
+    <div style="margin-top:8px;">
+      <span id="radiusInfo" class="badge"></span>
+      <span id="accInfo" class="badge" style="display:none;"></span>
+    </div>
+    <p class="muted" style="margin-top:12px;">Tip: Allow location permission and use a phone outdoors for better accuracy.</p>
+  </div>
+
+  <script>
+    // ===== Utilities =====
+    function parseCSV(text) {
+      const rows = []; let row = [], cell = '', inQuotes = false;
+      for (let i = 0; i < text.length; i++) {
+        const c = text[i], n = text[i + 1];
+        if (inQuotes) {
+          if (c === '"' && n === '"') { cell += '"'; i++; }
+          else if (c === '"') { inQuotes = false; }
+          else { cell += c; }
+        } else {
+          if (c === '"') { inQuotes = true; }
+          else if (c === ',') { row.push(cell); cell = ''; }
+          else if (c === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
+          else if (c === '\r') { /* ignore */ }
+          else { cell += c; }
+        }
       }
-      const num = Number(s); // Excel fraction of a day
-      if (Number.isFinite(num) && num >= 0 && num < 1) {
-        const total = Math.round(num * 24 * 60);
-        return Math.max(0, Math.min(1439, total));
-      }
-      return null;
-    };
+      if (cell.length || row.length) { row.push(cell); rows.push(row); }
+      return rows;
+    }
+    const stripQuotesTrim = (s) => String(s ?? '').replace(/^"+|"+$/g, '').trim();
+    const normalizeHeaders = (arr) => arr.map(h => stripQuotesTrim(h).toLowerCase());
+    const uniqueSorted = (arr) => [...new Set(arr)].sort((a,b)=>a.localeCompare(b));
+    function debounce(fn, delay = 200) { let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), delay); }; }
+    function escJS(s){ return String(s).replace(/\\/g,"\\\\").replace(/'/g,"\\'"); }
+    function haversineMeters(lat1, lon1, lat2, lon2) {
+      const R = 6371000, toRad = d => d * Math.PI / 180;
+      const dLat = toRad(lat2 - lat1), dLon = toRad(lon2 - lon1);
+      const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon/2)**2;
+      return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    }
 
-    // Find the row with the LATEST Jam Login (max minutes)
-    let best = null; // { minutes, hhmm: "HH:MM" }
-    for (const r of matches) {
-      const mins = toMinutes(r[jamLoginIdx]);
-      if (mins == null) continue;
-      if (!best || mins > best.minutes) {
-        const hh = String(Math.floor(mins / 60)).padStart(2, "0");
-        const mm = String(mins % 60).padStart(2, "0");
-        best = { minutes: mins, hhmm: `${hh}:${mm}` };
+    // ===== DOM & State =====
+    const salesNameInput = document.getElementById("salesNameInput");
+    const salesNameList  = document.getElementById("salesNameList");
+    const salesNameSuggestions = document.getElementById("salesNameSuggestions");
+
+    const dealerInput = document.getElementById("dealerInput");
+    const dealerSuggestions = document.getElementById("dealerSuggestions");
+    const dealerHint = document.getElementById("dealerHint");
+
+    const dealerCoords = document.getElementById("dealerCoords");
+    const myCoords = document.getElementById("myCoords");
+    const distanceEl = document.getElementById("distance");
+    const statusEl = document.getElementById("status");
+
+    const getGPSBtn = document.getElementById("getGPS");
+    const reloadBtn = document.getElementById("reload");
+    const goCheckoutBtn = document.getElementById("goCheckout");
+    const radiusInfo = document.getElementById("radiusInfo");
+    const accInfo = document.getElementById("accInfo");
+
+    const loginTimeEl = document.getElementById("loginTime");
+    const loginDeltaMinEl = document.getElementById("loginDeltaMin");
+
+    // CSV endpoints
+    const CSV_URL_DEALERS   = "https://docs.google.com/spreadsheets/d/e/2PACX-1vS3Hpp6N8pjYkRMy-Pi58yCxZB5o-rCdQfnBv0Z_vHMq6Uii5uxG60BnpQVcsyDTg-X9-A-HPodXhpT/pub?output=csv";
+    const CSV_URL_SALESMEN  = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTiHz0jejmmecSnTe5uK3Kwt_kx7HYcvMwRRQ_OeS1TA4evqMUwl8srVUe164DbJnxjYcuKuUsHQiFm/pub?gid=472318377&single=true&output=csv";
+    const SHEET_URL_TIME    = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQQSE39NKkvwxpJz1O8QxCFuudjvn2CJY3nyYyq-4pdi5XNU3nhsHMaMVemNxFqazjcPYt51_EZ0g8r/pub?gid=1647008010&single=true&output=csv";
+
+    let DEALERS = [];
+    let SALESPEOPLE = [];
+    let SELECTED_DEALER = null;
+    let SALES_NAME = "";
+    let MY_LOC = null;
+
+    const RADIUS_M = 100;
+    radiusInfo.textContent = `Allowed radius: ${RADIUS_M.toLocaleString()} m`;
+
+    // ===== Load Dealers =====
+    async function loadDealers() {
+      dealerSuggestions.innerHTML = `<span class="spinner"></span><span class="muted">Loading dealers…</span>`;
+      dealerHint.textContent = "";
+      try {
+        const res = await fetch(CSV_URL_DEALERS, { cache: "no-store" });
+        if (!res.ok) throw new Error("Cannot fetch dealer CSV");
+        const text = await res.text();
+        const rows = parseCSV(text);
+        if (!rows.length) throw new Error("Empty dealer CSV");
+        const header = normalizeHeaders(rows.shift());
+        const iName = header.findIndex(h => ["dealername","dealer name","name","dealer"].includes(h));
+        const iLat  = header.findIndex(h => ["latitude","lat"].includes(h));
+        const iLng  = header.findIndex(h => ["longitude","lng","lon","long"].includes(h));
+        if (iName < 0 || iLat < 0 || iLng < 0) throw new Error("CSV header must include DealerName, Latitude, Longitude");
+
+        DEALERS = rows.map(r => ({
+          name: stripQuotesTrim(r[iName]),
+          lat : parseFloat(stripQuotesTrim(r[iLat])),
+          lng : parseFloat(stripQuotesTrim(r[iLng]))
+        })).filter(d => d.name && Number.isFinite(d.lat) && Number.isFinite(d.lng));
+
+        dealerSuggestions.innerHTML = `<span class="muted">${DEALERS.length} dealers loaded. Start typing to filter.</span>`;
+        dealerHint.textContent = "Tip: Tap a suggestion pill to select.";
+      } catch (e) {
+        dealerSuggestions.innerHTML = `<span class="err">Error: ${e.message}</span>`;
       }
     }
-    if (!best) return;
 
-    // Show latest Jam Login
-    loginTimeEl.value = best.hhmm;
+    // ===== Load Salespeople =====
+    async function loadSalespeople() {
+      try {
+        const res = await fetch(CSV_URL_SALESMEN, { cache: "no-store" });
+        if (!res.ok) throw new Error("Cannot fetch salespeople CSV");
+        const text = await res.text();
+        const rows = parseCSV(text);
+        if (!rows.length) throw new Error("Empty salespeople CSV");
+        const header = normalizeHeaders(rows.shift());
+        const iName = header.findIndex(h => ["sales name","sales_name","salesname","name"].includes(h));
+        if (iName < 0) throw new Error("CSV header must include 'Sales Name'");
+        SALESPEOPLE = uniqueSorted(rows.map(r => stripQuotesTrim(r[iName])).filter(Boolean));
+        salesNameList.innerHTML = SALESPEOPLE.map(n => `<option value="${n}">`).join("");
+        renderSalesSuggestions("");
+      } catch (e) {
+        console.error("Error loading salespeople:", e.message);
+      }
+    }
 
-    // Compute minutes since that latest login
-    const loginDate = new Date(y, now.getMonth(), now.getDate(),
-                               Math.floor(best.minutes / 60), best.minutes % 60, 0, 0);
-    let deltaMs = Date.now() - loginDate.getTime();
-    if (deltaMs < 0) deltaMs += 24 * 60 * 60 * 1000; // handle past-midnight case
-    const deltaMin = Math.max(0, Math.round(deltaMs / 60000));
-    loginDeltaMinEl.value = String(deltaMin);
-  } catch (e) {
-    console.error("Jam Login lookup error:", e);
-  }
-}
+    // initial loads + reload
+    loadDealers();
+    loadSalespeople();
+    reloadBtn.addEventListener("click", loadDealers);
+
+    // ===== Sales Name Suggestions =====
+    function renderSalesSuggestions(query) {
+      const q = String(query || "").toLowerCase().trim();
+      const items = (q ? SALESPEOPLE.filter(n => n.toLowerCase().includes(q)) : SALESPEOPLE).slice(0, 20);
+      salesNameSuggestions.innerHTML = items.length
+        ? items.map(n => `<div class="pill" onclick="selectSalesName('${escJS(n)}')">${n}</div>`).join("")
+        : `<span class="muted">No matches.</span>`;
+    }
+    salesNameInput.addEventListener("input", e => renderSalesSuggestions(e.target.value));
+    salesNameInput.addEventListener("focus", () => renderSalesSuggestions(salesNameInput.value));
+    window.selectSalesName = function(name) {
+      SALES_NAME = name;
+      salesNameInput.value = name;
+      computeDistance(); // keep gate reactive
+      // Jam Login lookup happens after Get My Location
+    };
+
+    // ===== Dealer Suggestions =====
+    const updateDealerSuggestions = debounce(() => {
+      const q = dealerInput.value.toLowerCase().trim();
+      const items = (q ? DEALERS.filter(d => d.name.toLowerCase().includes(q)) : DEALERS).slice(0, 50);
+      dealerSuggestions.innerHTML = items.length
+        ? items.map(d => `<div class="pill" onclick="selectDealer('${escJS(d.name)}')">${d.name}</div>`).join("")
+        : `<span class="muted">No matches.</span>`;
+    }, 150);
+    dealerInput.addEventListener("input", updateDealerSuggestions);
+    dealerInput.addEventListener("focus", updateDealerSuggestions);
+
+    window.selectDealer = function(dealerName) {
+      const selected = DEALERS.find(d => d.name === dealerName);
+      if (!selected) return;
+      SELECTED_DEALER = selected;
+      dealerInput.value = dealerName;
+      dealerCoords.value = `${selected.lat}, ${selected.lng}`;
+      computeDistance(); // keep gate reactive
+      // Jam Login lookup happens after Get My Location
+    };
+
+    // ===== Jam Login lookup (pick LATEST time for today's trigger) =====
+    async function lookupLoginTime() {
+      if (!SHEET_URL_TIME || !SELECTED_DEALER || !SALES_NAME) return;
+
+      const now = new Date();
+      const y = now.getFullYear();
+      const m = String(now.getMonth() + 1).padStart(2, '0');
+      const d = String(now.getDate()).padStart(2, '0');
+      const trigger = `${m}/${d}/${y}${SALES_NAME}${SELECTED_DEALER.name}`;
+
+      loginTimeEl.value = "—";
+      loginDeltaMinEl.value = "—";
+
+      try {
+        const res = await fetch(SHEET_URL_TIME, { cache: "no-store" });
+        if (!res.ok) throw new Error("Cannot fetch time CSV");
+        const text = await res.text();
+        const rows = parseCSV(text);
+        if (!rows.length) return;
+
+        const header = normalizeHeaders(rows.shift());
+        let triggerIdx  = header.indexOf("trigger");   if (triggerIdx  < 0) triggerIdx  = 9; // fallback to your prior index
+        let jamLoginIdx = header.indexOf("jam login"); if (jamLoginIdx < 0) jamLoginIdx = 6; // fallback to 7th column (1-based)
+
+        // Filter all rows for today's trigger
+        const matches = rows.filter(r => stripQuotesTrim(r[triggerIdx]) === trigger);
+        if (!matches.length) return;
+
+        // Helper: convert Jam Login to minutes since midnight
+        const toMinutes = (raw) => {
+          const s = stripQuotesTrim(raw ?? "");
+          if (/^[0-2]?\d:[0-5]\d$/.test(s)) {
+            const [H, M] = s.split(":").map(n => parseInt(n, 10));
+            if (H >= 0 && H <= 23 && M >= 0 && M <= 59) return H * 60 + M;
+            return null;
+          }
+          const num = Number(s); // Excel fraction (0..1)
+          if (Number.isFinite(num) && num >= 0 && num < 1) {
+            const total = Math.round(num * 24 * 60);
+            return Math.max(0, Math.min(1439, total));
+          }
+          return null;
+        };
+
+        // Pick the latest login (max minutes)
+        let best = null; // { minutes, hhmm }
+        for (const r of matches) {
+          const mins = toMinutes(r[jamLoginIdx]);
+          if (mins == null) continue;
+          if (!best || mins > best.minutes) {
+            const hh = String(Math.floor(mins / 60)).padStart(2, "0");
+            const mm = String(mins % 60).padStart(2, "0");
+            best = { minutes: mins, hhmm: `${hh}:${mm}` };
+          }
+        }
+        if (!best) return;
+
+        // Show latest Jam Login
+        loginTimeEl.value = best.hhmm;
+
+        // Compute minutes since that latest login
+        const loginDate = new Date(y, now.getMonth(), now.getDate(),
+                                   Math.floor(best.minutes / 60), best.minutes % 60, 0, 0);
+        let deltaMs = Date.now() - loginDate.getTime();
+        if (deltaMs < 0) deltaMs += 24 * 60 * 60 * 1000; // handle past-midnight case
+        const deltaMin = Math.max(0, Math.round(deltaMs / 60000));
+        loginDeltaMinEl.value = String(deltaMin);
+      } catch (e) {
+        console.error("Jam Login lookup error:", e);
+      }
+    }
+
+    // ===== Distance + Gate (radius + minutes-since-login ≥ 15) =====
+    function computeDistance() {
+      if (!SELECTED_DEALER || !MY_LOC) {
+        statusEl.value = (!SELECTED_DEALER && !MY_LOC) ? "Select dealer & get GPS"
+                      : (!SELECTED_DEALER) ? "Select dealer"
+                      : "Get GPS";
+        statusEl.className = "";
+        goCheckoutBtn.disabled = true;
+        distanceEl.value = "";
+        return;
+      }
+
+      const dist = Math.round(haversineMeters(MY_LOC.lat, MY_LOC.lng, SELECTED_DEALER.lat, SELECTED_DEALER.lng));
+      distanceEl.value = String(dist);
+
+      const within = dist <= RADIUS_M;
+      statusEl.value = within ? "WITHIN RADIUS" : "OUT OF RADIUS";
+      statusEl.className = within ? "ok" : "warn";
+
+      const mins = parseInt(loginDeltaMinEl.value, 10);
+      const timeOk = Number.isFinite(mins) && mins >= 15;
+
+      goCheckoutBtn.disabled = !(within && timeOk);
+      radiusInfo.textContent = `Allowed radius: ${RADIUS_M.toLocaleString()} m (Time since login: ${timeOk ? "ok" : "<15"})`;
+    }
+
+    // ===== GPS (triggers Jam Login lookup, then gate re-check) =====
+    getGPSBtn.addEventListener("click", () => {
+      if (!navigator.geolocation) {
+        statusEl.value = "Geolocation not supported";
+        statusEl.className = "err";
+        return;
+      }
+      statusEl.value = "Requesting location…";
+      statusEl.className = "";
+      navigator.geolocation.getCurrentPosition(
+        async (pos) => {
+          MY_LOC = { lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy };
+          myCoords.value = `${MY_LOC.lat.toFixed(6)}, ${MY_LOC.lng.toFixed(6)} (±${Math.round(MY_LOC.acc)} m)`;
+          accInfo.textContent = `Accuracy: ±${Math.round(MY_LOC.acc)} m`;
+          accInfo.style.display = "inline-block";
+          // Only now do the lookup + compute
+          await lookupLoginTime();
+          computeDistance();
+        },
+        (err) => {
+          statusEl.value = `Location error: ${err.message}`;
+          statusEl.className = "err";
+        },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+      );
+    });
+  </script>
+</body>
+</html>
