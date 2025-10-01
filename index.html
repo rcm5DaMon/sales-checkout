@@ -28,11 +28,10 @@
     <h2>Sales Location & Time Check</h2>
     <p class="muted">Input your name and select dealer to check your location and time spent at the dealer.</p>
 
-    <!-- Sales Name Dropdown -->
+    <!-- Sales Name Input (with suggestions) -->
     <label for="salesNameInput">Sales Name</label>
-    <select id="salesNameInput">
-      <option value="">Select your name</option>
-    </select>
+    <input id="salesNameInput" type="text" placeholder="Type sales name..." autocomplete="off">
+    <div id="salesNameSuggestions"></div>
 
     <!-- Dealer Name -->
     <label for="dealerInput">Search dealer by name</label>
@@ -100,6 +99,7 @@
 
     // ------- State & DOM -------
     const salesNameInput = document.getElementById("salesNameInput");
+    const salesNameSuggestions = document.getElementById("salesNameSuggestions");
     const dealerInput = document.getElementById("dealerInput");
     const dealerSuggestions = document.getElementById("dealerSuggestions");
     const dealerCoords = document.getElementById("dealerCoords");
@@ -114,15 +114,12 @@
 
     const CSV_URL_DEALERS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vS3Hpp6N8pjYkRMy-Pi58yCxZB5o-rCdQfnBv0Z_vHMq6Uii5uxG60BnpQVcsyDTg-X9-A-HPodXhpT/pub?output=csv";
     const CSV_URL_SALESMEN = "https://docs.google.com/spreadsheets/d/1uSXdXuYlRxyYtXNTEQbzD7p_w7wBOr8VKg-n5HHMIJo/edit?gid=1037939658#gid=1037939658";
-    const RADIUS_M = 50; // 50 meters radius
 
     let DEALERS = []; 
     let SALESPEOPLE = [];
     let SELECTED_DEALER = null;
     let MY_LOC = null;
     let SALES_NAME = "";
-
-    radiusInfo.textContent = `Allowed radius: ${RADIUS_M} m`;
 
     // ------- Load Dealers -------
     async function loadDealers() {
@@ -166,22 +163,24 @@
         if (iName < 0) throw new Error("CSV header must include 'Sales Name'");
 
         SALESPEOPLE = rows.map(r => r[iName].trim()).filter(name => name);
-        SALESPEOPLE.forEach(name => {
-          const option = document.createElement("option");
-          option.value = name;
-          option.textContent = name;
-          salesNameInput.appendChild(option);
-        });
       } catch (e) {
         console.error("Error loading salespeople:", e.message);
       }
     }
     loadSalespeople();
 
-    // ------- Event Handlers -------
-    salesNameInput.addEventListener("change", (e) => {
-      SALES_NAME = e.target.value;
+    // ------- Sales Name Suggestions -------
+    salesNameInput.addEventListener("input", () => {
+      const query = salesNameInput.value.toLowerCase();
+      const suggestions = SALESPEOPLE.filter(name => name.toLowerCase().includes(query));
+      displaySalesNameSuggestions(suggestions);
     });
+
+    function displaySalesNameSuggestions(suggestions) {
+      salesNameSuggestions.innerHTML = suggestions
+        .map(name => `<div class="pill">${name}</div>`)
+        .join("");
+    }
 
     // ------- Geolocation -------
     getGPSBtn.addEventListener("click", () => {
