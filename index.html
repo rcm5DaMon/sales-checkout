@@ -343,4 +343,10 @@
         const timeSpent = parseInt(stripQuotesTrim(match[TIME_COL]), 10);
         return Number.isFinite(timeSpent) && timeSpent >= 15 ? timeSpent : timeSpent;
       } catch (e) {
-        console.error
+        console.error("Time check error:", e);
+        return false;
+      }
+    }
+  </script>
+</body>
+</html>
