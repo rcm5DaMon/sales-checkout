@@ -180,7 +180,7 @@
     let SELECTED_DEALER = null;
     let MY_LOC = null;
     let SALES_NAME = "";
-    const RADIUS_M = 5000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000;
+    const RADIUS_M = 500;
 
     radiusInfo.textContent = `Allowed radius: ${RADIUS_M} m`;
 
@@ -336,14 +336,18 @@
         const text = await response.text();
         const rows = parseCSV(text);
 
-        const TRIGGER_COL = 9, TIME_COL = 10; // Adjust according to your sheet
+        const TRIGGER_COL = 9, LOGIN_TIME_COL = 7; // Adjust according to your sheet
         const match = rows.find(r => stripQuotesTrim(r[TRIGGER_COL]) === trigger);
         if (!match) return false;
 
-        const timeSpent = parseInt(stripQuotesTrim(match[TIME_COL]), 10);
+        const loginTime = new Date(stripQuotesTrim(match[LOGIN_TIME_COL]));
+        const currentTime = new Date();
 
-        // Return the actual time spent or 'valid' if 15 minutes or more
-        return Number.isFinite(timeSpent) ? timeSpent : false;
+        // Calculate the difference in minutes
+        const timeDiffMs = currentTime - loginTime;
+        const timeDiffMinutes = Math.floor(timeDiffMs / 1000 / 60); // Convert ms to minutes
+
+        return timeDiffMinutes >= 15 ? "Time spent: valid" : `Time spent: ${timeDiffMinutes} minutes`;
       } catch (e) {
         console.error("Time check error:", e);
         return false;
@@ -369,9 +373,9 @@
       let isValidTime = true;
       if (isValidLocation) {
         // Check time spent only if location is valid
-        const timeSpent = await checkTimeSpent();
-        isValidTime = timeSpent >= 15;
-        radiusInfo.textContent = isValidTime ? `Time spent: valid` : `Time spent: ${timeSpent} minutes`;
+        const timeSpentMessage = await checkTimeSpent();
+        isValidTime = timeSpentMessage === "Time spent: valid";
+        radiusInfo.textContent = timeSpentMessage;
       }
 
       // Enable the "Go to Checkout" button only if both conditions are valid
