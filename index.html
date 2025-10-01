@@ -24,7 +24,6 @@
     .hint { font-size: .85rem; color: #555; margin-top: 4px; }
     .spinner { display:inline-block; width: 14px; height: 14px; border:2px solid #bbb; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: -2px; margin-right:6px;}
     @keyframes spin { to { transform: rotate(360deg); } }
-    /* Suggestion boxes */
     .sugg-box { margin-top: 6px; }
     .sugg-title { font-size:.85rem; color:#555; margin: 4px 0; }
   </style>
@@ -33,6 +32,7 @@
   <div class="card">
     <h2>Sales Location & Time Check</h2>
     <p class="muted">Input your name and select dealer to check your location and time spent at the dealer.</p>
+
     <!-- Sales Name with datalist + pills -->
     <label for="salesNameInput">Sales Name</label>
     <input id="salesNameInput" type="text" placeholder="Type sales name..." list="salesNameList" autocomplete="off" />
@@ -41,6 +41,7 @@
       <div class="sugg-title">Suggestions</div>
       <div id="salesNameSuggestions"></div>
     </div>
+
     <!-- Dealer Name -->
     <label for="dealerInput">Search dealer by name</label>
     <input id="dealerInput" type="text" placeholder="Type dealer name…" autocomplete="off" />
@@ -49,6 +50,7 @@
       <div id="dealerSuggestions"></div>
     </div>
     <div class="hint" id="dealerHint" aria-live="polite"></div>
+
     <!-- Coordinates -->
     <div class="row" style="margin-top:8px;">
       <div>
@@ -60,6 +62,7 @@
         <input id="myCoords" type="text" disabled placeholder="—" />
       </div>
     </div>
+
     <div class="row">
       <div>
         <label>Distance to Dealer (meters)</label>
@@ -67,170 +70,4 @@
       </div>
       <div>
         <label>Status</label>
-        <input id="status" type="text" disabled placeholder="—" />
-      </div>
-    </div>
-    <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-top:10px;">
-      <button id="getGPS">Get My Location</button>
-      <button id="reload">Reload Dealer List</button>
-      <button id="goCheckout" disabled>Go to Checkout</button>
-    </div>
-    <div style="margin-top:8px;">
-      <span id="radiusInfo" class="badge"></span>
-      <span id="accInfo" class="badge hidden"></span>
-    </div>
-    <p class="muted" style="margin-top:12px;"> Tip: Allow location permission and use a phone outdoors for better accuracy. </p>
-  </div>
-  <script>
-    // ============== Utilities ==============
-    const sleep = (ms) => new Promise(r => setTimeout(r, ms)); // CSV parser: handles quotes, commas, CRLF
-    function parseCSV(text) {
-      const rows = [];
-      let row = [], cell = '', inQuotes = false;
-      for (let i = 0; i < text.length; i++) {
-        const c = text[i], n = text[i + 1];
-        if (inQuotes) {
-          if (c === '"' && n === '"') { cell += '"'; i++; }
-          else if (c === '"') { inQuotes = false; }
-          else { cell += c; }
-        } else {
-          if (c === '"') { inQuotes = true; }
-          else if (c === ',') { row.push(cell); cell = ''; }
-          else if (c === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
-          else if (c === '\r') { /* ignore CR */ }
-          else { cell += c; }
-        }
-      }
-      if (cell.length || row.length) { row.push(cell); rows.push(row); }
-      return rows;
-    }
-    function stripQuotesTrim(s) { return String(s ?? '').replace(/^"+|"+$/g, '').trim(); }
-    function normalizeHeaders(arr) { return arr.map(h => stripQuotesTrim(h).toLowerCase()); }
-    function uniqueSorted(arr) { return [...new Set(arr)].sort((a,b)=>a.localeCompare(b)); }
-    function escJS(s) { return String(s).replace(/\\/g, "\\\\").replace(/'/g, "\\'"); }
-    function haversineMeters(lat1, lon1, lat2, lon2) {
-      const R = 6371000; const toRad = d => d * Math.PI / 180;
-      const dLat = toRad(lat2 - lat1); const dLon = toRad(lon2 - lon1);
-      const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon/2)**2;
-      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-      return R * c;
-    }
-    function debounce(fn, delay = 200) { let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), delay); }; }
-
-    // ============== State & DOM ==============
-    const salesNameInput = document.getElementById("salesNameInput");
-    const salesNameList = document.getElementById("salesNameList");
-    const salesNameSuggestions = document.getElementById("salesNameSuggestions");
-    const dealerInput = document.getElementById("dealerInput");
-    const dealerSuggestions = document.getElementById("dealerSuggestions");
-    const dealerHint = document.getElementById("dealerHint");
-    const dealerCoords = document.getElementById("dealerCoords");
-    const myCoords = document.getElementById("myCoords");
-    const distanceEl = document.getElementById("distance");
-    const statusEl = document.getElementById("status");
-    const getGPSBtn = document.getElementById("getGPS");
-    const reloadBtn = document.getElementById("reload");
-    const goCheckoutBtn = document.getElementById("goCheckout");
-    const radiusInfo = document.getElementById("radiusInfo");
-    const accInfo = document.getElementById("accInfo");
-
-    const CSV_URL_DEALERS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vS3Hpp6N8pjYkRMy-Pi58yCxZB5o-rCdQfnBv0Z_vHMq6Uii5uxG60BnpQVcsyDTg-X9-A-HPodXhpT/pub?output=csv";
-    const CSV_URL_SALESMEN = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTiHz0jejmmecSnTe5uK3Kwt_kx7HYcvMwRRQ_OeS1TA4evqMUwl8srVUe164DbJnxjYcuKuUsHQiFm/pub?gid=472318377&single=true&output=csv";
-    const SHEET_URL_TIME = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQQSE39NKkvwxpJz1O8QxCFuudjvn2CJY3nyYyq-4pdi5XNU3nhsHMaMVemNxFqazjcPYt51_EZ0g8r/pub?gid=1647008010&single=true&output=csv";
-    // optional time CSV
-    let DEALERS = [];
-    let SALESPEOPLE = [];
-    let SELECTED_DEALER = null;
-    let MY_LOC = null;
-    let SALES_NAME = "";
-
-    const RADIUS_M = 5000000000000000000000000000000000000000000000000000000000000000000000000000000000000;
-    radiusInfo.textContent = `Allowed radius: ${RADIUS_M} m`;
-
-    // ============== Load Dealers ==============
-    async function loadDealers() {
-      dealerSuggestions.innerHTML = `<span class="spinner"></span><span class="muted">Loading dealers…</span>`;
-      dealerHint.textContent = "";
-      try {
-        const res = await fetch(CSV_URL_DEALERS, { cache: "no-store" });
-        if (!res.ok) throw new Error("Cannot fetch dealer CSV");
-        const text = await res.text();
-        const rows = parseCSV(text);
-        if (!rows.length) throw new Error("Empty dealer CSV");
-        const header = normalizeHeaders(rows.shift());
-        const iName = header.findIndex(h => ["dealername","dealer name","name","dealer"].includes(h));
-        const iLat = header.findIndex(h => ["latitude","lat"].includes(h));
-        const iLng = header.findIndex(h => ["longitude","lng","lon","long"].includes(h));
-        if (iName < 0 || iLat < 0 || iLng < 0) throw new Error("CSV header must include DealerName, Latitude, Longitude");
-        DEALERS = rows.map(r => ({
-          name: stripQuotesTrim(r[iName]),
-          lat: parseFloat(stripQuotesTrim(r[iLat])),
-          lng: parseFloat(stripQuotesTrim(r[iLng])),
-        })).filter(d => d.name && Number.isFinite(d.lat) && Number.isFinite(d.lng));
-        dealerSuggestions.innerHTML = `<span class="muted">${DEALERS.length} dealers loaded. Start typing to filter.</span>`;
-        dealerHint.textContent = "Tip: Tap a suggestion pill to select.";
-      } catch (e) {
-        dealerSuggestions.innerHTML = `<span class="err">Error: ${e.message}</span>`;
-      }
-    } 
-
-
-    // Time Checking Logic for Salesman
-    async function checkTimeSpent() {
-      if (!SHEET_URL_TIME) return true; // skip if not used
-      if (!SELECTED_DEALER || !SALES_NAME) return false;
-      try {
-        // Generate the trigger in the new format: MM/DD/YYYY + SALES_NAME + DEALER_NAME
-        const date = new Date();
-        const y = date.getFullYear();
-        const m = String(date.getMonth() + 1).padStart(2, '0'); // Ensure 2-digit month
-        const d = String(date.getDate()).padStart(2, '0'); // Ensure 2-digit day
-        const trigger = `${m}/${d}/${y}${SALES_NAME}${SELECTED_DEALER.name}`;
-
-        // Fetch data from the CSV sheet
-        const response = await fetch(SHEET_URL_TIME, { cache: "no-store" });
-        if (!response.ok) throw new Error("Cannot fetch time CSV");
-        const text = await response.text();
-        const rows = parseCSV(text);
-        const TRIGGER_COL = 9, LOGIN_COL = 7; // Adjust according to your sheet
-        const match = rows.find(r => stripQuotesTrim(r[TRIGGER_COL]) === trigger);
-        if (!match) return false;
-
-        // Get the "Jam Login" value from the row
-        const loginTimeStr = stripQuotesTrim(match[LOGIN_COL]);
-        const [loginHours, loginMinutes] = loginTimeStr.split(':').map(num => parseInt(num));
-
-        if (isNaN(loginHours) || isNaN(loginMinutes)) {
-          console.error("Invalid Jam Login time format.");
-          return false;
-        }
-
-        // Convert "Jam Login" to a Date object for comparison
-        const loginTime = new Date();
-        loginTime.setHours(loginHours);
-        loginTime.setMinutes(loginMinutes);
-        loginTime.setSeconds(0);
-
-        // Calculate the time difference between current time and login time in minutes
-        const currentTime = new Date();
-        const timeDiff = Math.floor((currentTime - loginTime) / 60000); // Difference in minutes
-
-        // Display time information
-        const timeSpentInfo = document.getElementById("status");
-        if (timeDiff >= 15) {
-          timeSpentInfo.value = "Time is sufficient for logging out";
-          timeSpentInfo.className = "ok"; // green status
-        } else {
-          timeSpentInfo.value = `Time spent: ${timeDiff} minute(s)`;
-          timeSpentInfo.className = "warn"; // yellow status
-        }
-
-        return timeDiff >= 15; // Valid time spent (>= 15 minutes)
-      } catch (e) {
-        console.error("Time check error:", e);
-        return false;
-      }
-    }
-  </script>
-</body>
-</html>
+        <input id="status" type="text" di
