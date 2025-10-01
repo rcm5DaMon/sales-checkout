@@ -136,8 +136,8 @@
     const SHEET_URL_TIME = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQQSE39NKkvwxpJz1O8QxCFuudjvn2CJY3nyYyq-4pdi5XNU3nhsHMaMVemNxFqazjcPYt51_EZ0g8r/pub?gid=1647008010&single=true&output=csv";
 
     let DEALERS = [], SALESPEOPLE = [], SELECTED_DEALER = null, MY_LOC = null, SALES_NAME = "";
-    const RADIUS_M = 5000000000000000000000000000000000000000000000000000000000000000000000000000000; // meters
-    const MIN_TIME_MINUTES = 2;
+    const RADIUS_M = 500; // meters
+    const MIN_TIME_MINUTES = 15;
     radiusInfo.textContent = `Allowed radius: ${RADIUS_M} m`;
 
     // ===================== Loaders =====================
@@ -199,8 +199,8 @@
 
     // ===================== Time Check =====================
     async function checkTimeSpent() {
-      if (!SHEET_URL_TIME) return true;
-      if (!SELECTED_DEALER || !SALES_NAME) return false;
+      if (!SHEET_URL_TIME) return { ok: false, minutes: 0 };
+      if (!SELECTED_DEALER || !SALES_NAME) return { ok: false, minutes: 0 };
       try {
         const dealer = SELECTED_DEALER.name;
         const date = new Date();
@@ -214,17 +214,17 @@
         const text = await response.text();
         const rows = parseCSV(text);
 
-        const TRIGGER_COL = 9; // 10th column
-        const TIME_COL = 10;   // 11th column
+        const TRIGGER_COL = 9;
+        const TIME_COL = 10;
 
         const match = rows.find(row => stripQuotesTrim(row[TRIGGER_COL]) === trigger);
-        if (!match) return false;
+        if (!match) return { ok: false, minutes: 0 };
 
         const timeSpent = parseInt(stripQuotesTrim(match[TIME_COL]), 10);
-        return Number.isFinite(timeSpent) && timeSpent >= MIN_TIME_MINUTES;
+        return { ok: Number.isFinite(timeSpent) && timeSpent >= MIN_TIME_MINUTES, minutes: timeSpent };
       } catch (e) {
         console.error("Time check error:", e);
-        return false;
+        return { ok: false, minutes: 0 };
       }
     }
 
@@ -234,20 +234,20 @@
       const dist = Math.round(haversineMeters(MY_LOC.lat, MY_LOC.lng, SELECTED_DEALER.lat, SELECTED_DEALER.lng));
       distanceEl.value = dist;
       const isValidLocation = dist <= RADIUS_M;
-      const isValidTime = await checkTimeSpent();
+      const timeCheck = await checkTimeSpent();
 
-      if (isValidLocation && isValidTime) {
-        statusEl.value = "✅ WITHIN RADIUS & Time ≥ 15 min";
+      if (isValidLocation && timeCheck.ok) {
+        statusEl.value = `✅ WITHIN RADIUS & Time = ${timeCheck.minutes} min (OK)`;
         statusEl.className = "ok";
         goCheckoutBtn.disabled = false;
       } else {
         goCheckoutBtn.disabled = true;
-        if (!isValidLocation && !isValidTime) {
-          statusEl.value = "❌ Out of radius AND time spent < 15 min";
+        if (!isValidLocation && timeCheck.minutes < MIN_TIME_MINUTES) {
+          statusEl.value = `❌ Out of radius AND time = ${timeCheck.minutes} min (need ≥ ${MIN_TIME_MINUTES})`;
         } else if (!isValidLocation) {
           statusEl.value = "❌ Not within radius";
-        } else if (!isValidTime) {
-          statusEl.value = "❌ Time spent < 15 min";
+        } else if (timeCheck.minutes < MIN_TIME_MINUTES) {
+          statusEl.value = `❌ Time spent = ${timeCheck.minutes} min (need ≥ ${MIN_TIME_MINUTES})`;
         }
         statusEl.className = "err";
       }
