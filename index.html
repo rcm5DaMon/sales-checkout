@@ -35,7 +35,7 @@
     <label for="salesNameInput">Sales Name</label>
     <input id="salesNameInput" type="text" placeholder="Type sales name..." list="salesNameList" autocomplete="off" />
     <datalist id="salesNameList"></datalist>
-    <div id="salesNameSuggestions" class="hidden"></div> <!-- reserved (unused now) -->
+    <div id="salesNameSuggestions" class="hidden"></div>
 
     <!-- Dealer Name -->
     <label for="dealerInput">Search dealer by name</label>
@@ -86,14 +86,11 @@
     // ===================== Utilities =====================
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-    // Robust CSV parser (handles quotes, commas, CRLF)
     function parseCSV(text) {
       const rows = [];
       let row = [], cell = '', inQuotes = false;
-
       for (let i = 0; i < text.length; i++) {
         const c = text[i], n = text[i + 1];
-
         if (inQuotes) {
           if (c === '"' && n === '"') { cell += '"'; i++; }
           else if (c === '"') { inQuotes = false; }
@@ -102,7 +99,7 @@
           if (c === '"') { inQuotes = true; }
           else if (c === ',') { row.push(cell); cell = ''; }
           else if (c === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
-          else if (c === '\r') { /* ignore CR */ }
+          else if (c === '\r') { }
           else { cell += c; }
         }
       }
@@ -122,7 +119,7 @@
       return [...new Set(arr)].sort((a,b)=>a.localeCompare(b));
     }
 
-    function escJS(s) { // escape for inline onclick string literal
+    function escJS(s) {
       return String(s).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
     }
 
@@ -146,7 +143,7 @@
     // ===================== State & DOM =====================
     const salesNameInput = document.getElementById("salesNameInput");
     const salesNameList = document.getElementById("salesNameList");
-    const salesNameSuggestions = document.getElementById("salesNameSuggestions"); // reserved
+    const salesNameSuggestions = document.getElementById("salesNameSuggestions");
 
     const dealerInput = document.getElementById("dealerInput");
     const dealerSuggestions = document.getElementById("dealerSuggestions");
@@ -167,15 +164,15 @@
     const CSV_URL_DEALERS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vS3Hpp6N8pjYkRMy-Pi58yCxZB5o-rCdQfnBv0Z_vHMq6Uii5uxG60BnpQVcsyDTg-X9-A-HPodXhpT/pub?output=csv";
     const CSV_URL_SALESMEN = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTiHz0jejmmecSnTe5uK3Kwt_kx7HYcvMwRRQ_OeS1TA4evqMUwl8srVUe164DbJnxjYcuKuUsHQiFm/pub?gid=472318377&single=true&output=csv";
 
-    // Optional: time sheet URL (REPLACE with your actual published CSV)
-    const SHEET_URL_TIME = ""; // e.g. "https://docs.google.com/spreadsheets/d/e/.../pub?output=csv"
+    // ✅ Your Time Sheet CSV (published link)
+    const SHEET_URL_TIME = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQQSE39NKkvwxpJz1O8QxCFuudjvn2CJY3nyYyq-4pdi5XNU3nhsHMaMVemNxFqazjcPYt51_EZ0g8r/pub?gid=1647008010&single=true&output=csv";
 
     let DEALERS = [];
     let SALESPEOPLE = [];
     let SELECTED_DEALER = null;
     let MY_LOC = null;
     let SALES_NAME = "";
-    const RADIUS_M = 5000000000000000000000000000000000000000000000000000000000000000000000000000000000000;
+    const RADIUS_M = 500; // adjust as needed
 
     radiusInfo.textContent = `Allowed radius: ${RADIUS_M} m`;
 
@@ -191,8 +188,6 @@
         if (!rows.length) throw new Error("Empty dealer CSV");
 
         const header = normalizeHeaders(rows.shift());
-
-        // Accept flexible header names
         const iName = header.findIndex(h => ["dealername","dealer name","name","dealer"].includes(h));
         const iLat  = header.findIndex(h => ["latitude","lat"].includes(h));
         const iLng  = header.findIndex(h => ["longitude","lng","lon","long"].includes(h));
@@ -230,34 +225,25 @@
         SALESPEOPLE = uniqueSorted(
           rows.map(r => stripQuotesTrim(r[iName])).filter(Boolean)
         );
-
-        // Populate datalist
         salesNameList.innerHTML = SALESPEOPLE.map(n => `<option value="${n}">`).join("");
       } catch (e) {
         console.error("Error loading salespeople:", e.message);
       }
     }
 
-    // Initial loads
     loadDealers();
     loadSalespeople();
     reloadBtn.addEventListener("click", loadDealers);
 
-    // ===================== Sales Name Selection =====================
     salesNameInput.addEventListener("change", () => {
       SALES_NAME = stripQuotesTrim(salesNameInput.value);
-      // Clear custom suggestions (unused now)
       salesNameSuggestions.innerHTML = "";
-      computeDistance(); // may gate checkout if time-based logic uses name
+      computeDistance();
     });
 
-    // ===================== Dealer Name Suggestions =====================
     const updateDealerSuggestions = debounce(() => {
       const q = dealerInput.value.toLowerCase().trim();
-      if (!q) {
-        dealerSuggestions.innerHTML = "";
-        return;
-      }
+      if (!q) { dealerSuggestions.innerHTML = ""; return; }
       const suggestions = DEALERS.filter(d => d.name.toLowerCase().includes(q)).slice(0, 50);
       dealerSuggestions.innerHTML = suggestions
         .map(d => `<div class="pill" onclick="selectDealer('${escJS(d.name)}')">${d.name}</div>`)
@@ -266,7 +252,6 @@
 
     dealerInput.addEventListener("input", updateDealerSuggestions);
 
-    // Expose for inline onclick
     window.selectDealer = function(dealerName) {
       const selected = DEALERS.find(d => d.name === dealerName);
       if (!selected) return;
@@ -277,7 +262,6 @@
       computeDistance();
     };
 
-    // ===================== Geolocation =====================
     getGPSBtn.addEventListener("click", () => {
       if (!navigator.geolocation) {
         statusEl.value = "Geolocation not supported";
@@ -302,22 +286,18 @@
       );
     });
 
-    // ===================== Time Check (optional) =====================
+    // ===================== Time Check =====================
     async function checkTimeSpent() {
-      // If you don't use time gating, just return true.
       if (!SHEET_URL_TIME) return true;
-
       if (!SELECTED_DEALER || !SALES_NAME) return false;
 
       try {
         const dealer = SELECTED_DEALER.name;
-        // Use ISO date for a reliable key; adjust to your sheet logic:
         const date = new Date();
         const y = date.getFullYear();
         const m = String(date.getMonth() + 1).padStart(2, '0');
         const d = String(date.getDate()).padStart(2, '0');
-        const dateKey = `${y}-${m}-${d}`; // e.g., 2025-10-01
-
+        const dateKey = `${y}-${m}-${d}`;
         const trigger = `${dateKey}${SALES_NAME}${dealer}`;
 
         const response = await fetch(SHEET_URL_TIME, { cache: "no-store" });
@@ -325,43 +305,34 @@
         const text = await response.text();
         const rows = parseCSV(text);
 
-        // Adjust the indices below to your actual sheet layout:
-        // Example assumes:
-        // - trigger column at index 9
-        // - time spent (minutes) at index 10
-        const TRIGGER_COL = 9;
-        const TIME_COL = 10;
+        // ⚠️ Adjust these indices if your sheet columns differ
+        const TRIGGER_COL = 9; // 10th column
+        const TIME_COL = 10;   // 11th column
 
         const match = rows.find(row => stripQuotesTrim(row[TRIGGER_COL]) === trigger);
         if (!match) return false;
 
         const timeSpent = parseInt(stripQuotesTrim(match[TIME_COL]), 10);
-        return Number.isFinite(timeSpent) && timeSpent >= 15; // >= 15 minutes
+        return Number.isFinite(timeSpent) && timeSpent >= 15;
       } catch (e) {
         console.error("Time check error:", e);
-        // Fail-closed: do not allow checkout if time cannot be verified
         return false;
       }
     }
 
     // ===================== Distance + Gate =====================
     async function computeDistance() {
-      // Gate text if something missing
       if (!SELECTED_DEALER || !MY_LOC) { updateGate(); return; }
-
       const dist = Math.round(haversineMeters(MY_LOC.lat, MY_LOC.lng, SELECTED_DEALER.lat, SELECTED_DEALER.lng));
       distanceEl.value = dist;
-
       const isValidLocation = dist <= RADIUS_M;
       statusEl.value = isValidLocation ? "WITHIN RADIUS" : "OUT OF RADIUS";
       statusEl.className = isValidLocation ? "ok" : "warn";
 
-      // Only check time if location is valid (saves network)
       let isValidTime = true;
       if (isValidLocation) {
         isValidTime = await checkTimeSpent();
       }
-
       goCheckoutBtn.disabled = !(isValidLocation && isValidTime);
     }
 
@@ -376,10 +347,8 @@
       distanceEl.value = "";
     }
 
-    // ===================== Checkout =====================
     goCheckoutBtn.addEventListener("click", () => {
       if (goCheckoutBtn.disabled) return;
-      // TODO: replace with your real checkout URL
       window.location.href = "https://your-checkout-page.com";
     });
   </script>
