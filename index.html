@@ -83,7 +83,7 @@
     }
 
     const SHEET_URL_TIME = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQQSE39NKkvwxpJz1O8QxCFuudjvn2CJY3nyYyq-4pdi5XNU3nhsHMaMVemNxFqazjcPYt51_EZ0g8r/pub?gid=1647008010&single=true&output=csv";
-    const RADIUS_M = 500;
+    const RADIUS_M = 50000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000;
     const MIN_TIME_MINUTES = 15;
 
     const salesNameInput = document.getElementById("salesNameInput");
@@ -110,7 +110,7 @@
       const text = await response.text();
       const rows = parseCSV(text);
 
-      const DATE_COL = 3, SALES_COL = 0, DEALER_COL = 2, TIME_COL = 10;
+      const DATE_COL = 4, SALES_COL = 1, DEALER_COL = 3, TIME_COL = 10;
 
       let found = null;
       for (let row of rows) {
