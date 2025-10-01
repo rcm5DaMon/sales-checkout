@@ -180,7 +180,7 @@
     let SELECTED_DEALER = null;
     let MY_LOC = null;
     let SALES_NAME = "";
-    const RADIUS_M = 500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000;
+    const RADIUS_M = 500;
 
     radiusInfo.textContent = `Allowed radius: ${RADIUS_M} m`;
 
@@ -323,24 +323,27 @@
       if (!SELECTED_DEALER || !SALES_NAME) return false;
 
       try {
-        const dealer = SELECTED_DEALER.name;
+        // Generate the trigger in the new format: MM/DD/YYYY + SALES_NAME + DEALER_NAME
         const date = new Date();
-        const y = date.getFullYear(), m = String(date.getMonth()+1).padStart(2,'0'), d = String(date.getDate()).padStart(2,'0');
-        const trigger = `${y}-${m}-${d}${SALES_NAME}${dealer}`;
+        const y = date.getFullYear();
+        const m = String(date.getMonth() + 1).padStart(2, '0'); // Ensure 2-digit month
+        const d = String(date.getDate()).padStart(2, '0'); // Ensure 2-digit day
+        const trigger = `${m}/${d}/${y}${SALES_NAME}${SELECTED_DEALER.name}`;
 
+        // Fetch data from the CSV sheet
         const response = await fetch(SHEET_URL_TIME, { cache: "no-store" });
         if (!response.ok) throw new Error("Cannot fetch time CSV");
         const text = await response.text();
         const rows = parseCSV(text);
 
-        const TRIGGER_COL = 9, TIME_COL = 10; // adjust to your sheet
+        const TRIGGER_COL = 9, TIME_COL = 10; // Adjust according to your sheet
         const match = rows.find(r => stripQuotesTrim(r[TRIGGER_COL]) === trigger);
         if (!match) return false;
 
         const timeSpent = parseInt(stripQuotesTrim(match[TIME_COL]), 10);
         return Number.isFinite(timeSpent) && timeSpent >= 15;
       } catch (e) {
-        console.error("Time check error:", e); 
+        console.error("Time check error:", e);
         return false;
       }
     }
