@@ -115,6 +115,15 @@
     }
     function debounce(fn, delay = 200) { let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), delay); }; }
 
+    // Strong normalizer for matching
+    function normalizeKey(s) {
+      return String(s ?? "")
+        .toLowerCase()
+        .replace(/\u00a0/g, " ")   // replace non-breaking spaces
+        .replace(/\s+/g, "")       // remove all spaces
+        .trim();
+    }
+
     // ===================== State =====================
     const salesNameInput = document.getElementById("salesNameInput");
     const salesNameList = document.getElementById("salesNameList");
@@ -136,7 +145,7 @@
     const SHEET_URL_TIME = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQQSE39NKkvwxpJz1O8QxCFuudjvn2CJY3nyYyq-4pdi5XNU3nhsHMaMVemNxFqazjcPYt51_EZ0g8r/pub?gid=1647008010&single=true&output=csv";
 
     let DEALERS = [], SALESPEOPLE = [], SELECTED_DEALER = null, MY_LOC = null, SALES_NAME = "";
-    const RADIUS_M = 500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000; // meters
+    const RADIUS_M = 500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000; // meters
     const MIN_TIME_MINUTES = 15;
     radiusInfo.textContent = `Allowed radius: ${RADIUS_M} m`;
 
@@ -213,15 +222,17 @@
         const text = await response.text();
         const rows = parseCSV(text);
 
-        const DATE_COL = 4;   // given
-        const SALES_COL = 1;  // given
-        const DEALER_COL = 3; // given
-        const TIME_COL = 10;  // still 11th col for minutes
+        // 0-based indexes
+        const DATE_COL = 3;   // 4th col
+        const SALES_COL = 0;  // 1st col
+        const DEALER_COL = 2; // 3rd col
+        const TIME_COL = 10;  // 11th col for minutes
 
         const match = rows.find(row => {
-          const rowKey = `${stripQuotesTrim(row[DATE_COL])}${stripQuotesTrim(row[SALES_COL])}${stripQuotesTrim(row[DEALER_COL])}`;
-          const trigger = `${dateKey}${SALES_NAME}${dealer}`;
-          return rowKey.replace(/\s+/g, '').trim() === trigger.replace(/\s+/g, '').trim();
+          const rowKey = normalizeKey(`${row[DATE_COL]}${row[SALES_COL]}${row[DEALER_COL]}`);
+          const triggerKey = normalizeKey(`${dateKey}${SALES_NAME}${dealer}`);
+          console.log("RowKey:", rowKey, "| TriggerKey:", triggerKey);
+          return rowKey === triggerKey;
         });
 
         if (!match) return { ok: false, minutes: 0 };
