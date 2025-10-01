@@ -31,11 +31,10 @@
     <h2>Sales Location & Time Check</h2>
     <p class="muted">Input your name and select dealer to check your location and time spent at the dealer.</p>
 
-    <!-- Sales Name Input (native suggestions via datalist) -->
+    <!-- Sales Name Input -->
     <label for="salesNameInput">Sales Name</label>
     <input id="salesNameInput" type="text" placeholder="Type sales name..." list="salesNameList" autocomplete="off" />
     <datalist id="salesNameList"></datalist>
-    <div id="salesNameSuggestions" class="hidden"></div>
 
     <!-- Dealer Name -->
     <label for="dealerInput">Search dealer by name</label>
@@ -84,8 +83,6 @@
 
   <script>
     // ===================== Utilities =====================
-    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
     function parseCSV(text) {
       const rows = [];
       let row = [], cell = '', inQuotes = false;
@@ -106,152 +103,87 @@
       if (cell.length || row.length) { row.push(cell); rows.push(row); }
       return rows;
     }
-
-    function stripQuotesTrim(s) {
-      return String(s ?? '').replace(/^"+|"+$/g, '').trim();
-    }
-
-    function normalizeHeaders(arr) {
-      return arr.map(h => stripQuotesTrim(h).toLowerCase());
-    }
-
-    function uniqueSorted(arr) {
-      return [...new Set(arr)].sort((a,b)=>a.localeCompare(b));
-    }
-
-    function escJS(s) {
-      return String(s).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-    }
-
+    function stripQuotesTrim(s) { return String(s ?? '').replace(/^"+|"+$/g, '').trim(); }
+    function normalizeHeaders(arr) { return arr.map(h => stripQuotesTrim(h).toLowerCase()); }
+    function uniqueSorted(arr) { return [...new Set(arr)].sort((a,b)=>a.localeCompare(b)); }
+    function escJS(s) { return String(s).replace(/\\/g, "\\\\").replace(/'/g, "\\'"); }
     function haversineMeters(lat1, lon1, lat2, lon2) {
-      const R = 6371000;
-      const toRad = d => d * Math.PI / 180;
-      const dLat = toRad(lat2 - lat1);
-      const dLon = toRad(lon2 - lon1);
-      const a = Math.sin(dLat/2)**2 +
-                Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
-                Math.sin(dLon/2)**2;
-      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-      return R * c;
+      const R = 6371000; const toRad = d => d * Math.PI / 180;
+      const dLat = toRad(lat2 - lat1); const dLon = toRad(lon2 - lon1);
+      const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon/2)**2;
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); return R * c;
     }
+    function debounce(fn, delay = 200) { let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), delay); }; }
 
-    function debounce(fn, delay = 200) {
-      let t;
-      return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), delay); };
-    }
-
-    // ===================== State & DOM =====================
+    // ===================== State =====================
     const salesNameInput = document.getElementById("salesNameInput");
     const salesNameList = document.getElementById("salesNameList");
-    const salesNameSuggestions = document.getElementById("salesNameSuggestions");
-
     const dealerInput = document.getElementById("dealerInput");
     const dealerSuggestions = document.getElementById("dealerSuggestions");
     const dealerHint = document.getElementById("dealerHint");
-
     const dealerCoords = document.getElementById("dealerCoords");
     const myCoords = document.getElementById("myCoords");
     const distanceEl = document.getElementById("distance");
     const statusEl = document.getElementById("status");
-
     const getGPSBtn = document.getElementById("getGPS");
     const reloadBtn = document.getElementById("reload");
     const goCheckoutBtn = document.getElementById("goCheckout");
     const radiusInfo = document.getElementById("radiusInfo");
     const accInfo = document.getElementById("accInfo");
 
-    // ----- CSV sources -----
     const CSV_URL_DEALERS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vS3Hpp6N8pjYkRMy-Pi58yCxZB5o-rCdQfnBv0Z_vHMq6Uii5uxG60BnpQVcsyDTg-X9-A-HPodXhpT/pub?output=csv";
     const CSV_URL_SALESMEN = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTiHz0jejmmecSnTe5uK3Kwt_kx7HYcvMwRRQ_OeS1TA4evqMUwl8srVUe164DbJnxjYcuKuUsHQiFm/pub?gid=472318377&single=true&output=csv";
-
-    // ✅ Your Time Sheet CSV (published link)
     const SHEET_URL_TIME = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQQSE39NKkvwxpJz1O8QxCFuudjvn2CJY3nyYyq-4pdi5XNU3nhsHMaMVemNxFqazjcPYt51_EZ0g8r/pub?gid=1647008010&single=true&output=csv";
 
-    let DEALERS = [];
-    let SALESPEOPLE = [];
-    let SELECTED_DEALER = null;
-    let MY_LOC = null;
-    let SALES_NAME = "";
-    const RADIUS_M = 50000000000000000000000000000000000000000000000000000000000000000000; // adjust as needed
-
+    let DEALERS = [], SALESPEOPLE = [], SELECTED_DEALER = null, MY_LOC = null, SALES_NAME = "";
+    const RADIUS_M = 500; // meters
     radiusInfo.textContent = `Allowed radius: ${RADIUS_M} m`;
 
-    // ===================== Load Dealers =====================
+    // ===================== Loaders =====================
     async function loadDealers() {
       dealerSuggestions.innerHTML = `<span class="spinner"></span><span class="muted">Loading dealers…</span>`;
-      dealerHint.textContent = "";
       try {
         const res = await fetch(CSV_URL_DEALERS, { cache: "no-store" });
-        if (!res.ok) throw new Error("Cannot fetch dealer CSV");
         const text = await res.text();
         const rows = parseCSV(text);
-        if (!rows.length) throw new Error("Empty dealer CSV");
-
         const header = normalizeHeaders(rows.shift());
         const iName = header.findIndex(h => ["dealername","dealer name","name","dealer"].includes(h));
         const iLat  = header.findIndex(h => ["latitude","lat"].includes(h));
         const iLng  = header.findIndex(h => ["longitude","lng","lon","long"].includes(h));
-
-        if (iName < 0 || iLat < 0 || iLng < 0) {
-          throw new Error("CSV header must include DealerName, Latitude, Longitude");
-        }
-
         DEALERS = rows.map(r => ({
           name: stripQuotesTrim(r[iName]),
           lat: parseFloat(stripQuotesTrim(r[iLat])),
           lng: parseFloat(stripQuotesTrim(r[iLng]))
         })).filter(d => d.name && Number.isFinite(d.lat) && Number.isFinite(d.lng));
-
         dealerSuggestions.innerHTML = `<span class="muted">${DEALERS.length} dealers loaded.</span>`;
         dealerHint.textContent = "Type to search and tap a suggestion pill to select.";
       } catch (e) {
         dealerSuggestions.innerHTML = `<span class="err">Error: ${e.message}</span>`;
       }
     }
-
-    // ===================== Load Salespeople =====================
     async function loadSalespeople() {
       try {
         const res = await fetch(CSV_URL_SALESMEN, { cache: "no-store" });
-        if (!res.ok) throw new Error("Cannot fetch salespeople CSV");
         const text = await res.text();
         const rows = parseCSV(text);
-        if (!rows.length) throw new Error("Empty salespeople CSV");
-
         const header = normalizeHeaders(rows.shift());
         const iName = header.findIndex(h => ["sales name","sales_name","salesname","name"].includes(h));
-        if (iName < 0) throw new Error("CSV header must include 'Sales Name'");
-
-        SALESPEOPLE = uniqueSorted(
-          rows.map(r => stripQuotesTrim(r[iName])).filter(Boolean)
-        );
+        SALESPEOPLE = uniqueSorted(rows.map(r => stripQuotesTrim(r[iName])).filter(Boolean));
         salesNameList.innerHTML = SALESPEOPLE.map(n => `<option value="${n}">`).join("");
-      } catch (e) {
-        console.error("Error loading salespeople:", e.message);
-      }
+      } catch (e) { console.error("Error loading salespeople:", e.message); }
     }
-
-    loadDealers();
-    loadSalespeople();
+    loadDealers(); loadSalespeople();
     reloadBtn.addEventListener("click", loadDealers);
 
-    salesNameInput.addEventListener("change", () => {
-      SALES_NAME = stripQuotesTrim(salesNameInput.value);
-      salesNameSuggestions.innerHTML = "";
-      computeDistance();
-    });
-
+    // ===================== Events =====================
+    salesNameInput.addEventListener("change", () => { SALES_NAME = stripQuotesTrim(salesNameInput.value); computeDistance(); });
     const updateDealerSuggestions = debounce(() => {
       const q = dealerInput.value.toLowerCase().trim();
       if (!q) { dealerSuggestions.innerHTML = ""; return; }
       const suggestions = DEALERS.filter(d => d.name.toLowerCase().includes(q)).slice(0, 50);
-      dealerSuggestions.innerHTML = suggestions
-        .map(d => `<div class="pill" onclick="selectDealer('${escJS(d.name)}')">${d.name}</div>`)
-        .join("") || `<span class="muted">No matches.</span>`;
+      dealerSuggestions.innerHTML = suggestions.map(d => `<div class="pill" onclick="selectDealer('${escJS(d.name)}')">${d.name}</div>`).join("") || `<span class="muted">No matches.</span>`;
     }, 150);
-
     dealerInput.addEventListener("input", updateDealerSuggestions);
-
     window.selectDealer = function(dealerName) {
       const selected = DEALERS.find(d => d.name === dealerName);
       if (!selected) return;
@@ -261,15 +193,7 @@
       dealerCoords.value = `${selected.lat}, ${selected.lng}`;
       computeDistance();
     };
-
     getGPSBtn.addEventListener("click", () => {
-      if (!navigator.geolocation) {
-        statusEl.value = "Geolocation not supported";
-        statusEl.className = "err";
-        return;
-      }
-      statusEl.value = "Requesting location…";
-      statusEl.className = "";
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           MY_LOC = { lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy };
@@ -278,10 +202,7 @@
           accInfo.classList.remove("hidden");
           computeDistance();
         },
-        (err) => {
-          statusEl.value = `Location error: ${err.message}`;
-          statusEl.className = "err";
-        },
+        (err) => { statusEl.value = `Location error: ${err.message}`; statusEl.className = "err"; },
         { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
       );
     });
@@ -290,22 +211,20 @@
     async function checkTimeSpent() {
       if (!SHEET_URL_TIME) return true;
       if (!SELECTED_DEALER || !SALES_NAME) return false;
-
       try {
         const dealer = SELECTED_DEALER.name;
+        // Format date as MM/DD/YYYY
         const date = new Date();
-        const y = date.getFullYear();
-        const m = String(date.getMonth() + 1).padStart(2, '0');
-        const d = String(date.getDate()).padStart(2, '0');
-        const dateKey = `${y}-${m}-${d}`;
+        const mm = String(date.getMonth() + 1).padStart(2, '0');
+        const dd = String(date.getDate()).padStart(2, '0');
+        const yyyy = date.getFullYear();
+        const dateKey = `${mm}/${dd}/${yyyy}`;
         const trigger = `${dateKey}${SALES_NAME}${dealer}`;
 
         const response = await fetch(SHEET_URL_TIME, { cache: "no-store" });
-        if (!response.ok) throw new Error("Cannot fetch time CSV");
         const text = await response.text();
         const rows = parseCSV(text);
 
-        // ⚠️ Adjust these indices if your sheet columns differ
         const TRIGGER_COL = 9; // 10th column
         const TIME_COL = 10;   // 11th column
 
@@ -314,10 +233,7 @@
 
         const timeSpent = parseInt(stripQuotesTrim(match[TIME_COL]), 10);
         return Number.isFinite(timeSpent) && timeSpent >= 2;
-      } catch (e) {
-        console.error("Time check error:", e);
-        return false;
-      }
+      } catch (e) { console.error("Time check error:", e); return false; }
     }
 
     // ===================== Distance + Gate =====================
@@ -328,25 +244,16 @@
       const isValidLocation = dist <= RADIUS_M;
       statusEl.value = isValidLocation ? "WITHIN RADIUS" : "OUT OF RADIUS";
       statusEl.className = isValidLocation ? "ok" : "warn";
-
       let isValidTime = true;
-      if (isValidLocation) {
-        isValidTime = await checkTimeSpent();
-      }
+      if (isValidLocation) { isValidTime = await checkTimeSpent(); }
       goCheckoutBtn.disabled = !(isValidLocation && isValidTime);
     }
-
     function updateGate() {
-      const needDealer = !SELECTED_DEALER;
-      const needGPS = !MY_LOC;
-      if (needDealer && needGPS) { statusEl.value = "Select dealer & get GPS"; }
-      else if (needDealer)       { statusEl.value = "Select dealer"; }
-      else if (needGPS)          { statusEl.value = "Get GPS"; }
-      statusEl.className = "";
-      goCheckoutBtn.disabled = true;
-      distanceEl.value = "";
+      if (!SELECTED_DEALER && !MY_LOC) statusEl.value = "Select dealer & get GPS";
+      else if (!SELECTED_DEALER) statusEl.value = "Select dealer";
+      else if (!MY_LOC) statusEl.value = "Get GPS";
+      statusEl.className = ""; goCheckoutBtn.disabled = true; distanceEl.value = "";
     }
-
     goCheckoutBtn.addEventListener("click", () => {
       if (goCheckoutBtn.disabled) return;
       window.location.href = "https://your-checkout-page.com";
