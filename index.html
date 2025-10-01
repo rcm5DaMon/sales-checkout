@@ -178,8 +178,36 @@
 
     function displaySalesNameSuggestions(suggestions) {
       salesNameSuggestions.innerHTML = suggestions
-        .map(name => `<div class="pill">${name}</div>`)
+        .map(name => `<div class="pill" onclick="selectSalesName('${name}')">${name}</div>`)
         .join("");
+    }
+
+    function selectSalesName(name) {
+      salesNameInput.value = name;
+      salesNameSuggestions.innerHTML = ''; // Clear suggestions
+      SALES_NAME = name; // Update selected sales name
+    }
+
+    // ------- Dealer Name Suggestions -------
+    dealerInput.addEventListener("input", () => {
+      const query = dealerInput.value.toLowerCase();
+      const suggestions = DEALERS.filter(dealer => dealer.name.toLowerCase().includes(query));
+      displayDealerSuggestions(suggestions);
+    });
+
+    function displayDealerSuggestions(suggestions) {
+      dealerSuggestions.innerHTML = suggestions
+        .map(dealer => `<div class="pill" onclick="selectDealer('${dealer.name}')">${dealer.name}</div>`)
+        .join("");
+    }
+
+    function selectDealer(dealerName) {
+      const selected = DEALERS.find(dealer => dealer.name === dealerName);
+      SELECTED_DEALER = selected;
+      dealerInput.value = dealerName;
+      dealerSuggestions.innerHTML = ''; // Clear suggestions
+      dealerCoords.value = `${selected.lat}, ${selected.lng}`; // Show coordinates
+      computeDistance(); // Calculate distance after selecting dealer
     }
 
     // ------- Geolocation -------
