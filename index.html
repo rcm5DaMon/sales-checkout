@@ -123,7 +123,7 @@
     const normalizeHeaders = (arr) => arr.map(h => stripQuotesTrim(h).toLowerCase());
     const uniqueSorted = (arr) => [...new Set(arr)].sort((a,b)=>a.localeCompare(b));
     function debounce(fn, delay = 200) { let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), delay); }; }
-    function escJS(s){ return String(s).replace(/\\/g,"\\\\").replace(/'/g,"\\'"); }
+    function escJS(s){ return String(s).replace(/\\/g,"\\").replace(/'/g,"\\'"); }
     function haversineMeters(lat1, lon1, lat2, lon2) {
       const R = 6371000, toRad = d => d * Math.PI / 180;
       const dLat = toRad(lat2 - lat1), dLon = toRad(lon2 - lon1);
@@ -165,8 +165,11 @@
     let SALES_NAME = "";
     let MY_LOC = null;
 
-    const RADIUS_M = 100000000000000000000000000000000000000000000000000;
+    const RADIUS_M = 100000000000000000000000000000000000000000000000000; // as in your original
     radiusInfo.textContent = `Allowed radius: ${RADIUS_M.toLocaleString()} m`;
+
+    // ===== ADDED: Checkout base URL =====
+    const CHECKOUT_URL_BASE = "https://yourdomain.com/checkout"; // TODO: replace with your real checkout URL
 
     // ===== Load Dealers =====
     async function loadDealers() {
@@ -280,7 +283,7 @@
         if (!rows.length) return;
 
         const header = normalizeHeaders(rows.shift());
-        let triggerIdx  = header.indexOf("trigger");   if (triggerIdx  < 0) triggerIdx  = 9; // fallback to your prior index
+        let triggerIdx  = header.indexOf("trigger");   if (triggerIdx  < 0) triggerIdx  = 9; // fallback to prior index
         let jamLoginIdx = header.indexOf("jam login"); if (jamLoginIdx < 0) jamLoginIdx = 6; // fallback to 7th column (1-based)
 
         // Filter all rows for today's trigger
@@ -382,6 +385,24 @@
         },
         { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
       );
+    });
+
+    // ===== ADDED: Go to Checkout click handler =====
+    goCheckoutBtn.addEventListener('click', () => {
+      if (goCheckoutBtn.disabled) return; // gate still applies
+
+      const url = new URL(CHECKOUT_URL_BASE);
+      if (SALES_NAME) url.searchParams.set('sales', SALES_NAME);
+      if (SELECTED_DEALER) url.searchParams.set('dealer', SELECTED_DEALER.name);
+      if (MY_LOC) {
+        url.searchParams.set('lat', MY_LOC.lat.toFixed(6));
+        url.searchParams.set('lng', MY_LOC.lng.toFixed(6));
+      }
+      if (distanceEl.value) url.searchParams.set('dist', distanceEl.value);
+      if (loginTimeEl.value) url.searchParams.set('login', loginTimeEl.value);
+      if (loginDeltaMinEl.value) url.searchParams.set('deltaMin', loginDeltaMinEl.value);
+
+      window.location.href = url.toString(); // or window.open(url, '_blank')
     });
   </script>
 </body>
