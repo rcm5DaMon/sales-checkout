@@ -50,38 +50,48 @@
     </div>
     <div class="hint" id="dealerHint" aria-live="polite"></div>
 
-    <!-- Coordinates -->
+    <!-- Coordinates + Status -->
     <div class="row" style="margin-top:8px;">
       <div>
         <label>Dealer Coordinates</label>
         <input id="dealerCoords" type="text" disabled placeholder="—" />
       </div>
       <div>
-        <label>Your Live GPS</label>
-        <input id="myCoords" type="text" disabled placeholder="—" />
+        <!-- >>> NEW: Dealer Status field -->
+        <label>Dealer Status</label>
+        <input id="dealerStatus" type="text" disabled placeholder="—" />
       </div>
     </div>
 
     <div class="row">
+      <div>
+        <label>Your Live GPS</label>
+        <input id="myCoords" type="text" disabled placeholder="—" />
+      </div>
       <div>
         <label>Distance to Dealer (meters)</label>
         <input id="distance" type="text" disabled placeholder="—" />
       </div>
+    </div>
+
+    <div class="row">
       <div>
         <label>Status</label>
         <input id="status" type="text" disabled placeholder="—" aria-live="polite" />
       </div>
-    </div>
-
-    <!-- Jam Login + Time Since Login -->
-    <div class="row">
       <div>
         <label>Jam Login (HH:MM)</label>
         <input id="loginTime" type="text" disabled placeholder="—" />
       </div>
+    </div>
+
+    <div class="row">
       <div>
         <label>Time Since Login (minutes)</label>
         <input id="loginDeltaMin" type="text" disabled placeholder="—" />
+      </div>
+      <div>
+        <!-- empty to keep grid balanced -->
       </div>
     </div>
 
@@ -141,6 +151,7 @@
     const dealerHint = document.getElementById("dealerHint");
 
     const dealerCoords = document.getElementById("dealerCoords");
+    const dealerStatusEl = document.getElementById("dealerStatus");   // >>> NEW
     const myCoords = document.getElementById("myCoords");
     const distanceEl = document.getElementById("distance");
     const statusEl = document.getElementById("status");
@@ -165,13 +176,15 @@
     let SALES_NAME = "";
     let MY_LOC = null;
 
-    const RADIUS_M = 100000000000000000000000000000000000000000000000000; // as in your original
+    // absurd radius preserved from your original
+    const RADIUS_M = 100000000000000000000000000000000000000000000000000;
     radiusInfo.textContent = `Allowed radius: ${RADIUS_M.toLocaleString()} m`;
 
-    // ===== ADDED: Checkout base URL =====
-    const CHECKOUT_URL_BASE = "https://eraspace.com/"; // TODO: replace with your real checkout URL
+    // Checkout base URLs
+    const CHECKOUT_URL_OPEN   = "https://eraspace.com/";          // open dealer target
+    const CHECKOUT_URL_CLOSED = "https://example.com/alt-check";  // >>> NEW: closed dealer target (replace with your URL)
 
-    // ===== Load Dealers =====
+    // ===== Load Dealers (now reads optional Status column) =====
     async function loadDealers() {
       dealerSuggestions.innerHTML = `<span class="spinner"></span><span class="muted">Loading dealers…</span>`;
       dealerHint.textContent = "";
@@ -185,13 +198,19 @@
         const iName = header.findIndex(h => ["dealername","dealer name","name","dealer"].includes(h));
         const iLat  = header.findIndex(h => ["latitude","lat"].includes(h));
         const iLng  = header.findIndex(h => ["longitude","lng","lon","long"].includes(h));
+        const iStatus = header.findIndex(h => ["status","open/close","openclose","open_close"].includes(h)); // >>> NEW
         if (iName < 0 || iLat < 0 || iLng < 0) throw new Error("CSV header must include DealerName, Latitude, Longitude");
 
-        DEALERS = rows.map(r => ({
-          name: stripQuotesTrim(r[iName]),
-          lat : parseFloat(stripQuotesTrim(r[iLat])),
-          lng : parseFloat(stripQuotesTrim(r[iLng]))
-        })).filter(d => d.name && Number.isFinite(d.lat) && Number.isFinite(d.lng));
+        DEALERS = rows.map(r => {
+          const statusRaw = iStatus >= 0 ? stripQuotesTrim(r[iStatus]) : "OPEN";
+          const statusNorm = statusRaw ? statusRaw.toUpperCase() : "OPEN";
+          return {
+            name: stripQuotesTrim(r[iName]),
+            lat : parseFloat(stripQuotesTrim(r[iLat])),
+            lng : parseFloat(stripQuotesTrim(r[iLng])),
+            status: (statusNorm === "CLOSED" || statusNorm === "TUTUP") ? "CLOSED" : "OPEN" // >>> NEW
+          };
+        }).filter(d => d.name && Number.isFinite(d.lat) && Number.isFinite(d.lng));
 
         dealerSuggestions.innerHTML = `<span class="muted">${DEALERS.length} dealers loaded. Start typing to filter.</span>`;
         dealerHint.textContent = "Tip: Tap a suggestion pill to select.";
@@ -238,15 +257,14 @@
       SALES_NAME = name;
       salesNameInput.value = name;
       computeDistance(); // keep gate reactive
-      // Jam Login lookup happens after Get My Location
     };
 
-    // ===== Dealer Suggestions =====
+    // ===== Dealer Suggestions (show badge status on hover title) =====
     const updateDealerSuggestions = debounce(() => {
       const q = dealerInput.value.toLowerCase().trim();
       const items = (q ? DEALERS.filter(d => d.name.toLowerCase().includes(q)) : DEALERS).slice(0, 50);
       dealerSuggestions.innerHTML = items.length
-        ? items.map(d => `<div class="pill" onclick="selectDealer('${escJS(d.name)}')">${d.name}</div>`).join("")
+        ? items.map(d => `<div class="pill" title="${d.status}" onclick="selectDealer('${escJS(d.name)}')">${d.name}</div>`).join("")
         : `<span class="muted">No matches.</span>`;
     }, 150);
     dealerInput.addEventListener("input", updateDealerSuggestions);
@@ -258,11 +276,12 @@
       SELECTED_DEALER = selected;
       dealerInput.value = dealerName;
       dealerCoords.value = `${selected.lat}, ${selected.lng}`;
-      computeDistance(); // keep gate reactive
-      // Jam Login lookup happens after Get My Location
+      dealerStatusEl.value = selected.status; // >>> NEW
+      // Recompute rules immediately when a dealer is picked
+      computeDistance();
     };
 
-    // ===== Jam Login lookup (pick LATEST time for today's trigger) =====
+    // ===== Jam Login lookup (unchanged) =====
     async function lookupLoginTime() {
       if (!SHEET_URL_TIME || !SELECTED_DEALER || !SALES_NAME) return;
 
@@ -283,14 +302,12 @@
         if (!rows.length) return;
 
         const header = normalizeHeaders(rows.shift());
-        let triggerIdx  = header.indexOf("trigger");   if (triggerIdx  < 0) triggerIdx  = 9; // fallback to prior index
-        let jamLoginIdx = header.indexOf("jam login"); if (jamLoginIdx < 0) jamLoginIdx = 6; // fallback to 7th column (1-based)
+        let triggerIdx  = header.indexOf("trigger");   if (triggerIdx  < 0) triggerIdx  = 9;
+        let jamLoginIdx = header.indexOf("jam login"); if (jamLoginIdx < 0) jamLoginIdx = 6;
 
-        // Filter all rows for today's trigger
         const matches = rows.filter(r => stripQuotesTrim(r[triggerIdx]) === trigger);
         if (!matches.length) return;
 
-        // Helper: convert Jam Login to minutes since midnight
         const toMinutes = (raw) => {
           const s = stripQuotesTrim(raw ?? "");
           if (/^[0-2]?\d:[0-5]\d$/.test(s)) {
@@ -298,7 +315,7 @@
             if (H >= 0 && H <= 23 && M >= 0 && M <= 59) return H * 60 + M;
             return null;
           }
-          const num = Number(s); // Excel fraction (0..1)
+          const num = Number(s);
           if (Number.isFinite(num) && num >= 0 && num < 1) {
             const total = Math.round(num * 24 * 60);
             return Math.max(0, Math.min(1439, total));
@@ -306,8 +323,7 @@
           return null;
         };
 
-        // Pick the latest login (max minutes)
-        let best = null; // { minutes, hhmm }
+        let best = null;
         for (const r of matches) {
           const mins = toMinutes(r[jamLoginIdx]);
           if (mins == null) continue;
@@ -319,14 +335,12 @@
         }
         if (!best) return;
 
-        // Show latest Jam Login
         loginTimeEl.value = best.hhmm;
 
-        // Compute minutes since that latest login
         const loginDate = new Date(y, now.getMonth(), now.getDate(),
                                    Math.floor(best.minutes / 60), best.minutes % 60, 0, 0);
         let deltaMs = Date.now() - loginDate.getTime();
-        if (deltaMs < 0) deltaMs += 24 * 60 * 60 * 1000; // handle past-midnight case
+        if (deltaMs < 0) deltaMs += 24 * 60 * 60 * 1000;
         const deltaMin = Math.max(0, Math.round(deltaMs / 60000));
         loginDeltaMinEl.value = String(deltaMin);
       } catch (e) {
@@ -334,12 +348,41 @@
       }
     }
 
-    // ===== Distance + Gate (radius + minutes-since-login ≥ 15) =====
+    // >>> NEW: helper
+    function isDealerClosed() {
+      return SELECTED_DEALER && SELECTED_DEALER.status === "CLOSED";
+    }
+
+    // ===== Distance + Gate (now respects dealer status) =====
     function computeDistance() {
-      if (!SELECTED_DEALER || !MY_LOC) {
-        statusEl.value = (!SELECTED_DEALER && !MY_LOC) ? "Select dealer & get GPS"
-                      : (!SELECTED_DEALER) ? "Select dealer"
-                      : "Get GPS";
+      // If dealer not selected yet
+      if (!SELECTED_DEALER) {
+        statusEl.value = !MY_LOC ? "Select dealer & get GPS" : "Select dealer";
+        statusEl.className = "";
+        goCheckoutBtn.disabled = true;
+        distanceEl.value = "";
+        return;
+      }
+
+      // If dealer is CLOSED ➜ always enable, skip checks
+      if (isDealerClosed()) {
+        statusEl.value = "DEALER CLOSED — location/time check skipped";
+        statusEl.className = "warn";
+        // Distance displayed only if we already have GPS (optional)
+        if (MY_LOC) {
+          const dist = Math.round(haversineMeters(MY_LOC.lat, MY_LOC.lng, SELECTED_DEALER.lat, SELECTED_DEALER.lng));
+          distanceEl.value = String(dist);
+        } else {
+          distanceEl.value = "";
+        }
+        goCheckoutBtn.disabled = false; // always enabled
+        radiusInfo.textContent = `Dealer CLOSED — checkout allowed`;
+        return;
+      }
+
+      // Dealer is OPEN ➜ original behavior
+      if (!MY_LOC) {
+        statusEl.value = "Get GPS";
         statusEl.className = "";
         goCheckoutBtn.disabled = true;
         distanceEl.value = "";
@@ -375,8 +418,10 @@
           myCoords.value = `${MY_LOC.lat.toFixed(6)}, ${MY_LOC.lng.toFixed(6)} (±${Math.round(MY_LOC.acc)} m)`;
           accInfo.textContent = `Accuracy: ±${Math.round(MY_LOC.acc)} m`;
           accInfo.style.display = "inline-block";
-          // Only now do the lookup + compute
-          await lookupLoginTime();
+          // Only lookup login time if dealer is OPEN (not needed when CLOSED)
+          if (!isDealerClosed()) {
+            await lookupLoginTime();
+          }
           computeDistance();
         },
         (err) => {
@@ -387,13 +432,17 @@
       );
     });
 
-    // ===== ADDED: Go to Checkout click handler =====
+    // ===== Go to Checkout (choose URL by dealer status) =====
     goCheckoutBtn.addEventListener('click', () => {
-      if (goCheckoutBtn.disabled) return; // gate still applies
+      if (goCheckoutBtn.disabled) return;
 
-      const url = new URL(CHECKOUT_URL_BASE);
+      const base = isDealerClosed() ? CHECKOUT_URL_CLOSED : CHECKOUT_URL_OPEN;
+      const url = new URL(base);
       if (SALES_NAME) url.searchParams.set('sales', SALES_NAME);
-      if (SELECTED_DEALER) url.searchParams.set('dealer', SELECTED_DEALER.name);
+      if (SELECTED_DEALER) {
+        url.searchParams.set('dealer', SELECTED_DEALER.name);
+        url.searchParams.set('status', SELECTED_DEALER.status); // helpful for downstream
+      }
       if (MY_LOC) {
         url.searchParams.set('lat', MY_LOC.lat.toFixed(6));
         url.searchParams.set('lng', MY_LOC.lng.toFixed(6));
@@ -402,7 +451,7 @@
       if (loginTimeEl.value) url.searchParams.set('login', loginTimeEl.value);
       if (loginDeltaMinEl.value) url.searchParams.set('deltaMin', loginDeltaMinEl.value);
 
-      window.location.href = url.toString(); // or window.open(url, '_blank')
+      window.location.href = url.toString();
     });
   </script>
 </body>
