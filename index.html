@@ -50,48 +50,46 @@
     </div>
     <div class="hint" id="dealerHint" aria-live="polite"></div>
 
-    <!-- Coordinates + Status -->
+    <!-- ===== ADDED: Dealer Status ===== -->
+    <label for="dealerStatusSelect">Dealer Status</label>
+    <select id="dealerStatusSelect" aria-label="Dealer status">
+      <option value="open" selected>Open</option>
+      <option value="close">Close</option>
+    </select>
+    <div class="hint">Open = require location & time gate. Close = skip gate and use alternate link.</div>
+
+    <!-- Coordinates -->
     <div class="row" style="margin-top:8px;">
       <div>
         <label>Dealer Coordinates</label>
         <input id="dealerCoords" type="text" disabled placeholder="—" />
       </div>
       <div>
-        <!-- >>> NEW: Dealer Status field -->
-        <label>Dealer Status</label>
-        <input id="dealerStatus" type="text" disabled placeholder="—" />
+        <label>Your Live GPS</label>
+        <input id="myCoords" type="text" disabled placeholder="—" />
       </div>
     </div>
 
     <div class="row">
-      <div>
-        <label>Your Live GPS</label>
-        <input id="myCoords" type="text" disabled placeholder="—" />
-      </div>
       <div>
         <label>Distance to Dealer (meters)</label>
         <input id="distance" type="text" disabled placeholder="—" />
       </div>
-    </div>
-
-    <div class="row">
       <div>
         <label>Status</label>
         <input id="status" type="text" disabled placeholder="—" aria-live="polite" />
       </div>
+    </div>
+
+    <!-- Jam Login + Time Since Login -->
+    <div class="row">
       <div>
         <label>Jam Login (HH:MM)</label>
         <input id="loginTime" type="text" disabled placeholder="—" />
       </div>
-    </div>
-
-    <div class="row">
       <div>
         <label>Time Since Login (minutes)</label>
         <input id="loginDeltaMin" type="text" disabled placeholder="—" />
-      </div>
-      <div>
-        <!-- empty to keep grid balanced -->
       </div>
     </div>
 
@@ -151,7 +149,6 @@
     const dealerHint = document.getElementById("dealerHint");
 
     const dealerCoords = document.getElementById("dealerCoords");
-    const dealerStatusEl = document.getElementById("dealerStatus");   // >>> NEW
     const myCoords = document.getElementById("myCoords");
     const distanceEl = document.getElementById("distance");
     const statusEl = document.getElementById("status");
@@ -165,6 +162,9 @@
     const loginTimeEl = document.getElementById("loginTime");
     const loginDeltaMinEl = document.getElementById("loginDeltaMin");
 
+    // ===== ADDED: status select =====
+    const dealerStatusSelect = document.getElementById("dealerStatusSelect");
+
     // CSV endpoints
     const CSV_URL_DEALERS   = "https://docs.google.com/spreadsheets/d/e/2PACX-1vS3Hpp6N8pjYkRMy-Pi58yCxZB5o-rCdQfnBv0Z_vHMq6Uii5uxG60BnpQVcsyDTg-X9-A-HPodXhpT/pub?output=csv";
     const CSV_URL_SALESMEN  = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTiHz0jejmmecSnTe5uK3Kwt_kx7HYcvMwRRQ_OeS1TA4evqMUwl8srVUe164DbJnxjYcuKuUsHQiFm/pub?gid=472318377&single=true&output=csv";
@@ -176,15 +176,14 @@
     let SALES_NAME = "";
     let MY_LOC = null;
 
-    // absurd radius preserved from your original
     const RADIUS_M = 100000000000000000000000000000000000000000000000000;
     radiusInfo.textContent = `Allowed radius: ${RADIUS_M.toLocaleString()} m`;
 
-    // Checkout base URLs
-    const CHECKOUT_URL_OPEN   = "https://eraspace.com/";          // open dealer target
-    const CHECKOUT_URL_CLOSED = "https://example.com/alt-check";  // >>> NEW: closed dealer target (replace with your URL)
+    // ===== ADDED: Checkout URLs =====
+    const CHECKOUT_URL_BASE   = "https://eraspace.com/";        // when OPEN
+    const CHECKOUT_URL_CLOSED = "https://eraspace.com/closed";  // when CLOSE  <-- change to your real target
 
-    // ===== Load Dealers (now reads optional Status column) =====
+    // ===== Load Dealers =====
     async function loadDealers() {
       dealerSuggestions.innerHTML = `<span class="spinner"></span><span class="muted">Loading dealers…</span>`;
       dealerHint.textContent = "";
@@ -198,19 +197,13 @@
         const iName = header.findIndex(h => ["dealername","dealer name","name","dealer"].includes(h));
         const iLat  = header.findIndex(h => ["latitude","lat"].includes(h));
         const iLng  = header.findIndex(h => ["longitude","lng","lon","long"].includes(h));
-        const iStatus = header.findIndex(h => ["status","open/close","openclose","open_close"].includes(h)); // >>> NEW
         if (iName < 0 || iLat < 0 || iLng < 0) throw new Error("CSV header must include DealerName, Latitude, Longitude");
 
-        DEALERS = rows.map(r => {
-          const statusRaw = iStatus >= 0 ? stripQuotesTrim(r[iStatus]) : "OPEN";
-          const statusNorm = statusRaw ? statusRaw.toUpperCase() : "OPEN";
-          return {
-            name: stripQuotesTrim(r[iName]),
-            lat : parseFloat(stripQuotesTrim(r[iLat])),
-            lng : parseFloat(stripQuotesTrim(r[iLng])),
-            status: (statusNorm === "CLOSED" || statusNorm === "TUTUP") ? "CLOSED" : "OPEN" // >>> NEW
-          };
-        }).filter(d => d.name && Number.isFinite(d.lat) && Number.isFinite(d.lng));
+        DEALERS = rows.map(r => ({
+          name: stripQuotesTrim(r[iName]),
+          lat : parseFloat(stripQuotesTrim(r[iLat])),
+          lng : parseFloat(stripQuotesTrim(r[iLng]))
+        })).filter(d => d.name && Number.isFinite(d.lat) && Number.isFinite(d.lng));
 
         dealerSuggestions.innerHTML = `<span class="muted">${DEALERS.length} dealers loaded. Start typing to filter.</span>`;
         dealerHint.textContent = "Tip: Tap a suggestion pill to select.";
@@ -256,15 +249,15 @@
     window.selectSalesName = function(name) {
       SALES_NAME = name;
       salesNameInput.value = name;
-      computeDistance(); // keep gate reactive
+      updateGate(); // keep gate reactive
     };
 
-    // ===== Dealer Suggestions (show badge status on hover title) =====
+    // ===== Dealer Suggestions =====
     const updateDealerSuggestions = debounce(() => {
       const q = dealerInput.value.toLowerCase().trim();
       const items = (q ? DEALERS.filter(d => d.name.toLowerCase().includes(q)) : DEALERS).slice(0, 50);
       dealerSuggestions.innerHTML = items.length
-        ? items.map(d => `<div class="pill" title="${d.status}" onclick="selectDealer('${escJS(d.name)}')">${d.name}</div>`).join("")
+        ? items.map(d => `<div class="pill" onclick="selectDealer('${escJS(d.name)}')">${d.name}</div>`).join("")
         : `<span class="muted">No matches.</span>`;
     }, 150);
     dealerInput.addEventListener("input", updateDealerSuggestions);
@@ -276,12 +269,10 @@
       SELECTED_DEALER = selected;
       dealerInput.value = dealerName;
       dealerCoords.value = `${selected.lat}, ${selected.lng}`;
-      dealerStatusEl.value = selected.status; // >>> NEW
-      // Recompute rules immediately when a dealer is picked
-      computeDistance();
+      updateGate(); // recompute gate
     };
 
-    // ===== Jam Login lookup (unchanged) =====
+    // ===== Jam Login lookup (pick LATEST time for today's trigger) =====
     async function lookupLoginTime() {
       if (!SHEET_URL_TIME || !SELECTED_DEALER || !SALES_NAME) return;
 
@@ -348,51 +339,51 @@
       }
     }
 
-    // >>> NEW: helper
-    function isDealerClosed() {
-      return SELECTED_DEALER && SELECTED_DEALER.status === "CLOSED";
+    // ===== Distance calc (no gate) =====
+    function computeDistanceOnly() {
+      if (!SELECTED_DEALER || !MY_LOC) {
+        distanceEl.value = "";
+        return null;
+      }
+      const dist = Math.round(haversineMeters(MY_LOC.lat, MY_LOC.lng, SELECTED_DEALER.lat, SELECTED_DEALER.lng));
+      distanceEl.value = String(dist);
+      return dist;
     }
 
-    // ===== Distance + Gate (now respects dealer status) =====
-    function computeDistance() {
-      // If dealer not selected yet
+    // ===== ADDED: unified gate depending on status =====
+    function updateGate() {
+      const statusVal = dealerStatusSelect.value; // 'open' | 'close'
+
+      // Require at least dealer selected for any checkout (both modes)
       if (!SELECTED_DEALER) {
-        statusEl.value = !MY_LOC ? "Select dealer & get GPS" : "Select dealer";
+        statusEl.value = "Select dealer";
         statusEl.className = "";
         goCheckoutBtn.disabled = true;
-        distanceEl.value = "";
         return;
       }
 
-      // If dealer is CLOSED ➜ always enable, skip checks
-      if (isDealerClosed()) {
-        statusEl.value = "DEALER CLOSED — location/time check skipped";
+      // If CLOSE → skip GPS/time gate; button enabled immediately
+      if (statusVal === "close") {
+        statusEl.value = "DEALER CLOSED (gate bypass)";
         statusEl.className = "warn";
-        // Distance displayed only if we already have GPS (optional)
-        if (MY_LOC) {
-          const dist = Math.round(haversineMeters(MY_LOC.lat, MY_LOC.lng, SELECTED_DEALER.lat, SELECTED_DEALER.lng));
-          distanceEl.value = String(dist);
-        } else {
-          distanceEl.value = "";
-        }
-        goCheckoutBtn.disabled = false; // always enabled
-        radiusInfo.textContent = `Dealer CLOSED — checkout allowed`;
+        // Still compute and show distance if GPS already available (nice to have)
+        if (MY_LOC) computeDistanceOnly();
+        goCheckoutBtn.disabled = false;
+        radiusInfo.textContent = `Allowed radius: ${RADIUS_M.toLocaleString()} m (bypass)`;
         return;
       }
 
-      // Dealer is OPEN ➜ original behavior
+      // If OPEN → enforce original gate: inside radius AND time since login ≥ 15
+      // Show helpful interim statuses:
       if (!MY_LOC) {
         statusEl.value = "Get GPS";
         statusEl.className = "";
         goCheckoutBtn.disabled = true;
-        distanceEl.value = "";
         return;
       }
 
-      const dist = Math.round(haversineMeters(MY_LOC.lat, MY_LOC.lng, SELECTED_DEALER.lat, SELECTED_DEALER.lng));
-      distanceEl.value = String(dist);
-
-      const within = dist <= RADIUS_M;
+      const dist = computeDistanceOnly();
+      const within = dist != null ? dist <= RADIUS_M : false;
       statusEl.value = within ? "WITHIN RADIUS" : "OUT OF RADIUS";
       statusEl.className = within ? "ok" : "warn";
 
@@ -418,11 +409,9 @@
           myCoords.value = `${MY_LOC.lat.toFixed(6)}, ${MY_LOC.lng.toFixed(6)} (±${Math.round(MY_LOC.acc)} m)`;
           accInfo.textContent = `Accuracy: ±${Math.round(MY_LOC.acc)} m`;
           accInfo.style.display = "inline-block";
-          // Only lookup login time if dealer is OPEN (not needed when CLOSED)
-          if (!isDealerClosed()) {
-            await lookupLoginTime();
-          }
-          computeDistance();
+          // Only now do the lookup + compute
+          await lookupLoginTime();
+          updateGate();
         },
         (err) => {
           statusEl.value = `Location error: ${err.message}`;
@@ -432,17 +421,34 @@
       );
     });
 
-    // ===== Go to Checkout (choose URL by dealer status) =====
+    // ===== ADDED: react to status change =====
+    dealerStatusSelect.addEventListener("change", updateGate);
+
+    // ===== ADDED: also re-check when loginDelta updates periodically (optional) =====
+    // You may add a timer if your sheet updates over time; for now, gate recalculates on GPS and selection events.
+
+    // ===== Checkout click handler (choose URL by status) =====
     goCheckoutBtn.addEventListener('click', () => {
       if (goCheckoutBtn.disabled) return;
 
-      const base = isDealerClosed() ? CHECKOUT_URL_CLOSED : CHECKOUT_URL_OPEN;
+      const statusVal = dealerStatusSelect.value;
+      const base = (statusVal === 'close') ? CHECKOUT_URL_CLOSED : CHECKOUT_URL_BASE;
+
+      // If OPEN, double-check gate server-side as well in your endpoint (defense-in-depth).
+      if (statusVal === 'open') {
+        const mins = parseInt(loginDeltaMinEl.value, 10);
+        const dist = parseInt(distanceEl.value, 10);
+        const within = Number.isFinite(dist) && dist <= RADIUS_M;
+        const timeOk = Number.isFinite(mins) && mins >= 15;
+        if (!(within && timeOk)) {
+          // safety guard; should be disabled already
+          return;
+        }
+      }
+
       const url = new URL(base);
       if (SALES_NAME) url.searchParams.set('sales', SALES_NAME);
-      if (SELECTED_DEALER) {
-        url.searchParams.set('dealer', SELECTED_DEALER.name);
-        url.searchParams.set('status', SELECTED_DEALER.status); // helpful for downstream
-      }
+      if (SELECTED_DEALER) url.searchParams.set('dealer', SELECTED_DEALER.name);
       if (MY_LOC) {
         url.searchParams.set('lat', MY_LOC.lat.toFixed(6));
         url.searchParams.set('lng', MY_LOC.lng.toFixed(6));
@@ -450,6 +456,7 @@
       if (distanceEl.value) url.searchParams.set('dist', distanceEl.value);
       if (loginTimeEl.value) url.searchParams.set('login', loginTimeEl.value);
       if (loginDeltaMinEl.value) url.searchParams.set('deltaMin', loginDeltaMinEl.value);
+      url.searchParams.set('dealerStatus', statusVal);
 
       window.location.href = url.toString();
     });
