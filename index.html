@@ -388,7 +388,7 @@
       statusEl.className = within ? "ok" : "warn";
 
       const mins = parseInt(loginDeltaMinEl.value, 10);
-      const timeOk = Number.isFinite(mins) && mins >= 15;
+      const timeOk = Number.isFinite(mins) && mins >= 2;
 
       goCheckoutBtn.disabled = !(within && timeOk);
       radiusInfo.textContent = `Allowed radius: ${RADIUS_M.toLocaleString()} m (Time since login: ${timeOk ? "ok" : "<15"})`;
