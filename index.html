@@ -439,7 +439,7 @@
         const mins = parseInt(loginDeltaMinEl.value, 10);
         const dist = parseInt(distanceEl.value, 10);
         const within = Number.isFinite(dist) && dist <= RADIUS_M;
-        const timeOk = Number.isFinite(mins) && mins >= 15;
+        const timeOk = Number.isFinite(mins) && mins >= 2;
         if (!(within && timeOk)) {
           // safety guard; should be disabled already
           return;
