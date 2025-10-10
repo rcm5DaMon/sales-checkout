@@ -176,7 +176,7 @@
     let SALES_NAME = "";
     let MY_LOC = null;
 
-    const RADIUS_M = 35;
+    const RADIUS_M = 5000000000000000000000000000000000000000000000000000000000000000000000000000000;
     radiusInfo.textContent = `Allowed radius: ${RADIUS_M.toLocaleString()} m`;
 
     // ===== ADDED: Checkout URLs =====
@@ -388,10 +388,10 @@
       statusEl.className = within ? "ok" : "warn";
 
       const mins = parseInt(loginDeltaMinEl.value, 10);
-      const timeOk = Number.isFinite(mins) && mins >= 20;
+      const timeOk = Number.isFinite(mins) && mins >= 5;
 
       goCheckoutBtn.disabled = !(within && timeOk);
-      radiusInfo.textContent = `Allowed radius: ${RADIUS_M.toLocaleString()} m (Time since login: ${timeOk ? "ok" : "<20"})`;
+      radiusInfo.textContent = `Allowed radius: ${RADIUS_M.toLocaleString()} m (Time since login: ${timeOk ? "ok" : "<5"})`;
     }
 
     // ===== GPS (triggers Jam Login lookup, then gate re-check) =====
